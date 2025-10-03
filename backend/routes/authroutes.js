@@ -1,23 +1,7 @@
-// ENHANCED AUTH ROUTES - routes/authroutes.js
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-
-// Generate JWT token
-const generateToken = (userId, email, name) => {
-  return jwt.sign(
-    { 
-      userId, 
-      email, 
-      name,
-      iat: Date.now() / 1000
-    },
-    process.env.JWT_SECRET || 'your-fallback-secret',
-    { expiresIn: '7d' }
-  );
-};
+const authService = require('../services/authService');
 
 // Login route
 router.post('/login', async (req, res) => {
@@ -37,9 +21,9 @@ router.post('/login', async (req, res) => {
     
     if (!user) {
       // For demo purposes, create user if doesn't exist
-      const hashedPassword = await bcrypt.hash(password, 10);
+      const hashedPassword = await authService.hashPassword(password);
       user = new User({
-        name: email.split('@'),
+        name: email.split('@')[0],
         email: email.toLowerCase(),
         password: hashedPassword
       });
@@ -47,7 +31,7 @@ router.post('/login', async (req, res) => {
       console.log('👤 New user created during login:', email);
     } else {
       // Verify password for existing users
-      const isValidPassword = await bcrypt.compare(password, user.password);
+      const isValidPassword = await authService.comparePassword(password, user.password);
       if (!isValidPassword) {
         return res.status(401).json({
           success: false,
@@ -57,7 +41,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Generate token
-    const token = generateToken(user._id, user.email, user.name);
+    const token = authService.generateToken(user._id, user.email, user.name);
 
     res.json({
       success: true,
@@ -75,9 +59,9 @@ router.post('/login', async (req, res) => {
 
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error during login' 
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error during login'
     });
   }
 });
@@ -112,7 +96,7 @@ router.post('/signup', async (req, res) => {
     }
 
     // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await authService.hashPassword(password);
 
     // Create user
     const user = new User({
@@ -124,7 +108,7 @@ router.post('/signup', async (req, res) => {
     await user.save();
 
     // Generate token
-    const token = generateToken(user._id, user.email, user.name);
+    const token = authService.generateToken(user._id, user.email, user.name);
 
     res.status(201).json({
       success: true,
@@ -150,9 +134,9 @@ router.post('/signup', async (req, res) => {
       });
     }
 
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error during signup' 
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error during signup'
     });
   }
 });
@@ -161,7 +145,7 @@ router.post('/signup', async (req, res) => {
 router.get('/verify', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
-    const token = authHeader && authHeader.split(' ');
+    const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
       return res.status(401).json({
@@ -170,7 +154,7 @@ router.get('/verify', async (req, res) => {
       });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-fallback-secret');
+    const decoded = authService.verifyToken(token);
     const user = await User.findById(decoded.userId);
 
     if (!user) {
@@ -199,11 +183,12 @@ router.get('/verify', async (req, res) => {
   }
 });
 
-// Logout route (optional - mainly clears server-side data if needed)
-router.post('/logout', (req, res) => {
+// Test route
+router.get('/test', (req, res) => {
   res.json({
     success: true,
-    message: 'Logged out successfully'
+    message: 'Auth routes are working',
+    timestamp: new Date()
   });
 });
 

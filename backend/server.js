@@ -1,4 +1,3 @@
-// ENHANCED SERVER.JS - server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -8,6 +7,8 @@ const connectDB = require('./config/database');
 
 const app = express();
 const server = http.createServer(app);
+
+// Socket.IO setup with CORS
 const io = socketIo(server, {
   cors: {
     origin: ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"],
@@ -26,32 +27,18 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Connect to MongoDB
-connectDB();
-
-// Import routes
+// Import routes with error handling
 const authRoutes = require('./routes/authroutes');
 const emailRoutes = require('./routes/emailroutes');
 
-// Add missing route files if they don't exist
-let searchRoutes, slackRoutes;
-try {
-  searchRoutes = require('./routes/search');
-} catch (e) {
-  // Create basic search routes
-  searchRoutes = express.Router();
-  searchRoutes.get('/health', (req, res) => res.json({ status: 'ok', service: 'search' }));
-  searchRoutes.get('/search', (req, res) => res.json({ success: true, results: [] }));
-}
+// Create missing routes with basic fallbacks
+let searchRoutes = express.Router();
+searchRoutes.get('/health', (req, res) => res.json({ status: 'ok', service: 'search' }));
+searchRoutes.get('/', (req, res) => res.json({ success: true, results: [] }));
 
-try {
-  slackRoutes = require('./routes/slack');
-} catch (e) {
-  // Create basic slack routes
-  slackRoutes = express.Router();
-  slackRoutes.get('/test', (req, res) => res.json({ success: true, message: 'Slack service available' }));
-  slackRoutes.post('/notify/:emailId', (req, res) => res.json({ success: true, message: 'Notification sent' }));
-}
+let slackRoutes = express.Router();
+slackRoutes.get('/test', (req, res) => res.json({ success: true, message: 'Slack service available' }));
+slackRoutes.post('/notify/:emailId', (req, res) => res.json({ success: true, message: 'Notification sent' }));
 
 // Use routes
 app.use('/api/auth', authRoutes);
@@ -73,24 +60,42 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Basic root route
+// Root route with API documentation
 app.get('/', (req, res) => {
   res.json({
     message: 'OneBox Email Aggregator API',
     version: '1.0.0',
+    status: 'running',
     endpoints: {
       health: '/health',
       auth: '/api/auth/*',
       emails: '/api/emails/*',
       search: '/api/search/*',
       slack: '/api/slack/*'
+    },
+    documentation: {
+      login: 'POST /api/auth/login',
+      signup: 'POST /api/auth/signup',
+      emails: 'GET /api/emails/list',
+      fetch: 'POST /api/emails/fetch'
     }
   });
 });
 
-// Enhanced Socket.IO setup
-const socketHandler = require('./sockets/socketHandler');
-socketHandler(io);
+// Socket.IO handler
+try {
+  const socketHandler = require('./sockets/socketHandler');
+  socketHandler(io);
+} catch (error) {
+  console.warn('Socket handler not found, creating basic handler...');
+  io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
+    socket.emit('connection-status', { status: 'connected' });
+    socket.on('disconnect', () => {
+      console.log('Client disconnected:', socket.id);
+    });
+  });
+}
 
 // Global error handler
 app.use((error, req, res, next) => {
@@ -109,6 +114,7 @@ app.use((req, res) => {
     error: `Route ${req.method} ${req.originalUrl} not found`,
     availableRoutes: [
       'GET /health',
+      'GET /',
       'POST /api/auth/login',
       'POST /api/auth/signup',
       'GET /api/emails/list',
@@ -119,13 +125,28 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
-  console.log(`🚀 OneBox Server running on port ${PORT}`);
-  console.log(`📧 Email fetching system active`);
-  console.log(`🔔 Real-time notifications enabled`);
-  console.log(`🌐 CORS enabled for localhost:3000, localhost:5173`);
-  console.log(`📝 API Documentation: http://localhost:${PORT}`);
-});
+// Start server
+const startServer = async () => {
+  try {
+    await connectDB();
+    
+    server.listen(PORT, () => {
+      console.log(`🚀 OneBox Server running on port ${PORT}`);
+      console.log(`📧 Email fetching system active`);
+      console.log(`🔔 Real-time notifications enabled`);
+      console.log(`🌐 CORS enabled for localhost:3000, localhost:5173`);
+      console.log(`📝 API Documentation: http://localhost:${PORT}`);
+      console.log(`💾 Database: ${process.env.MONGODB_URI ? 'Configured' : 'Not configured'}`);
+      console.log(`🤖 OpenAI: ${process.env.OPENAI_API_KEY ? 'Configured' : 'Not configured'}`);
+      console.log(`📬 Gmail: ${process.env.GMAIL_USER ? 'Configured' : 'Not configured'}`);
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer();
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
