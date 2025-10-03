@@ -1,238 +1,106 @@
+// EMAIL ROUTES - routes/emails.js
 const express = require('express');
 const router = express.Router();
-const emailService = require('../services/emailService');
-const jobQueue = require('../services/jobQueue');
-const realTimeSync = require('../services/realTimeSync');
-const EmailAccount = require('../models/emailAccounts');
 const Email = require('../models/email');
+const emailService = require('../services/emailService');
 
-// Existing endpoints
-router.get('/test', async (req, res) => {
-  try {
-    const accountCount = await EmailAccount.countDocuments();
-    const emailCount = await Email.countDocuments();
-
-    res.json({
-      message: 'Email service working',
-      accounts: accountCount,
-      emails: emailCount,
-      timestamp: new Date()
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Test failed',
-      message: error.message
-    });
-  }
-});
-
-router.post('/fetch', async (req, res) => {
-  try {
-    const { accountId, limit = 5 } = req.body;
-
-    if (!accountId) {
-      return res.status(400).json({
-        error: 'accountId required'
-      });
-    }
-
-    console.log(`🚀 Starting fetch for account: ${accountId}`);
-    const startTime = Date.now();
-
-    const emails = await emailService.fetchLatestEmails(accountId, limit);
-    const duration = Date.now() - startTime;
-
-    console.log(`✅ Fetch completed in ${duration}ms`);
-
-    res.json({
-      message: 'Fetch completed',
-      count: emails.length,
-      duration: `${duration}ms`,
-      emails: emails.map(email => ({
-        id: email._id,
-        subject: email.subject,
-        from: email.from,
-        category: email.category,
-        date: email.date
-      }))
-    });
-
-  } catch (error) {
-    console.error('❌ Fetch error:', error);
-
-    res.status(500).json({
-      error: 'Fetch failed',
-      message: error.message,
-      type: error.message.includes('timeout') ? 'timeout' : 
-            error.message.includes('ECONNRESET') ? 'connection' : 'unknown'
-    });
-  }
-});
-
+// Get emails list
 router.get('/list', async (req, res) => {
   try {
-    const { accountId, limit = 10 } = req.query;
-
-    const query = accountId ? { accountId } : {};
-
-    const emails = await Email.find(query)
+    const { userId, limit = 50 } = req.query;
+    
+    const emails = await Email.find({ userId })
       .sort({ date: -1 })
-      .limit(parseInt(limit))
-      .select('subject from date category');
-
+      .limit(parseInt(limit));
+    
     res.json({
-      count: emails.length,
-      emails: emails
+      success: true,
+      emails,
+      count: emails.length
     });
-
+    
   } catch (error) {
-    res.status(500).json({
-      error: 'List failed',
-      message: error.message
-    });
+    console.error('List emails error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-router.get('/account/:id', async (req, res) => {
+// Fetch new emails
+router.post('/fetch', async (req, res) => {
   try {
-    const account = await EmailAccount.findById(req.params.id);
+    const { userEmail } = req.body;
+    
+    // This will be handled by socket.io in real-time
+    // But we can still provide a response
+    const emailCount = await Email.countDocuments({ userId: userEmail });
+    
+    res.json({
+      success: true,
+      message: 'Email fetch initiated',
+      count: emailCount
+    });
+    
+  } catch (error) {
+    console.error('Fetch emails error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-    if (!account) {
-      return res.status(404).json({
-        error: 'Account not found'
-      });
+// Get email statistics
+router.get('/stats', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    
+    const total = await Email.countDocuments({ userId });
+    const unread = await Email.countDocuments({ userId, isRead: false });
+    const starred = await Email.countDocuments({ userId, isStarred: true });
+    
+    const categories = await Email.aggregate([
+      { $match: { userId } },
+      { $group: { _id: '$category', count: { $sum: 1 } } }
+    ]);
+    
+    const categoryStats = {};
+    categories.forEach(cat => {
+      categoryStats[cat._id] = cat.count;
+    });
+    
+    res.json({
+      success: true,
+      stats: {
+        total,
+        unread,
+        starred,
+        categories: categoryStats
+      }
+    });
+    
+  } catch (error) {
+    console.error('Stats error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Update email (mark as read, star, etc.)
+router.patch('/:emailId', async (req, res) => {
+  try {
+    const { emailId } = req.params;
+    const updates = req.body;
+    
+    const email = await Email.findByIdAndUpdate(emailId, updates, { new: true });
+    
+    if (!email) {
+      return res.status(404).json({ success: false, error: 'Email not found' });
     }
-
-    const emailCount = await Email.countDocuments({ accountId: account._id });
-
+    
     res.json({
-      account: {
-        id: account._id,
-        email: account.email,
-        lastSync: account.lastSync
-      },
-      emailCount: emailCount
+      success: true,
+      email
     });
-
+    
   } catch (error) {
-    res.status(500).json({
-      error: 'Account fetch failed',
-      message: error.message
-    });
-  }
-});
-
-// NEW: Job Queue endpoints
-router.post('/queue/fetch', async (req, res) => {
-  try {
-    const { accountId, priority = 'normal' } = req.body;
-
-    if (!accountId) {
-      return res.status(400).json({
-        error: 'accountId required'
-      });
-    }
-
-    const job = await jobQueue.addEmailFetchJob(accountId, priority);
-
-    res.json({
-      message: 'Email fetch job queued successfully',
-      jobId: job.id,
-      accountId: accountId,
-      priority: priority,
-      timestamp: new Date()
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to queue job',
-      message: error.message
-    });
-  }
-});
-
-router.get('/queue/status', async (req, res) => {
-  try {
-    const status = await jobQueue.getQueueStatus();
-
-    res.json({
-      message: 'Queue status retrieved',
-      status: status,
-      timestamp: new Date()
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to get queue status',
-      message: error.message
-    });
-  }
-});
-
-// NEW: Real-time sync endpoints
-router.post('/sync/start', async (req, res) => {
-  try {
-    const { accountId } = req.body;
-
-    if (!accountId) {
-      return res.status(400).json({
-        error: 'accountId required'
-      });
-    }
-
-    const result = await realTimeSync.startRealTimeSync(accountId);
-
-    res.json({
-      message: 'Real-time sync started',
-      result: result,
-      timestamp: new Date()
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to start real-time sync',
-      message: error.message
-    });
-  }
-});
-
-router.post('/sync/stop', async (req, res) => {
-  try {
-    const { accountId } = req.body;
-
-    if (!accountId) {
-      return res.status(400).json({
-        error: 'accountId required'
-      });
-    }
-
-    const result = await realTimeSync.stopRealTimeSync(accountId);
-
-    res.json({
-      message: 'Real-time sync stopped',
-      result: result,
-      timestamp: new Date()
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to stop real-time sync',
-      message: error.message
-    });
-  }
-});
-
-router.get('/sync/status', async (req, res) => {
-  try {
-    const activeSyncs = realTimeSync.getActiveSyncs();
-
-    res.json({
-      message: 'Sync status retrieved',
-      activeSyncs: activeSyncs,
-      count: activeSyncs.length,
-      timestamp: new Date()
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to get sync status',
-      message: error.message
-    });
+    console.error('Update email error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

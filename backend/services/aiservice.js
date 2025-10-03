@@ -1,166 +1,133 @@
-const OpenAI = require('openai');
+// AI CATEGORIZATION SERVICE - services/aiService.js
+const { OpenAI } = require('openai');
 
 class AIService {
   constructor() {
-    if (process.env.OPENAI_API_KEY) {
-      this.openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        timeout: 10000
-      });
-      console.log('🤖 OpenAI initialized');
-    } else {
-      console.log('⚠️ No OpenAI key, using fallback');
-      this.openai = null;
-    }
+    this.openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
   }
 
-  async categorizeEmail(subject, body) {
-    console.log('🤖 Categorizing email...');
-
-    // If no OpenAI, use simple rules
-    if (!this.openai) {
-      return this.smartCategorize(subject, body);
-    }
-
+  async categorizeEmail(subject, bodyText) {
     try {
-      const prompt = `Categorize this email as one of: Interested, Not Interested, Meeting Booked, Spam, Out of Office
+      console.log('🤖 Categorizing email with AI:', subject);
 
-Subject: ${subject || 'No Subject'}
-Body: ${(body || '').substring(0, 500)}
+      const prompt = `
+        Analyze this email and categorize it into one of these categories:
+        - Interested: Business inquiries, collaboration requests, positive responses
+        - Not Interested: Rejections, declines, "not interested" responses
+        - Meeting Booked: Meeting confirmations, calendar invites, scheduled appointments
+        - Spam: Promotional emails, advertisements, suspicious content
+        - Out of Office: Auto-replies, vacation messages, away notifications
 
-Category:`;
+        Email Subject: ${subject}
+        Email Body: ${bodyText?.substring(0, 500)}
 
-      const response = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 20,
-        temperature: 0
+        Respond with just the category name.
+      `;
+
+      const completion = await this.openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 50,
+        temperature: 0.3
       });
 
-      const category = response.choices[0].message.content.trim();
-
-      // Validate response
+      const category = completion.choices[0].message.content.trim();
+      
+      // Validate category
       const validCategories = ['Interested', 'Not Interested', 'Meeting Booked', 'Spam', 'Out of Office'];
-      if (validCategories.includes(category)) {
-        console.log(`✅ AI result: ${category}`);
-        return category;
-      } else {
-        console.log(`⚠️ Invalid AI response, using smart fallback`);
-        return this.smartCategorize(subject, body);
-      }
+      const finalCategory = validCategories.includes(category) ? category : this.fallbackCategorization(subject, bodyText);
+      
+      console.log(`✅ AI Categorized as: ${finalCategory}`);
+      return finalCategory;
 
     } catch (error) {
-      // Handle specific OpenAI errors
-      if (error.status === 429) {
-        console.log('💰 OpenAI quota exceeded, using smart categorization');
-      } else if (error.status === 401) {
-        console.log('🔑 OpenAI API key invalid, using smart categorization');  
-      } else {
-        console.error('❌ AI failed:', error.message);
-      }
-
-      return this.smartCategorize(subject, body);
+      console.error('❌ AI categorization error:', error);
+      // Fallback to rule-based categorization
+      return this.fallbackCategorization(subject, bodyText);
     }
   }
 
-  smartCategorize(subject, body) {
-    const content = `${subject || ''} ${body || ''}`.toLowerCase();
-
-    console.log('🧠 Using smart categorization rules...');
-
-    // Enhanced categorization rules
-
-    // Out of Office patterns (check first - most specific)
-    if (content.includes('out of office') || 
-        content.includes('vacation') || 
-        content.includes('auto-reply') ||
-        content.includes('automatic reply') ||
-        content.includes('currently away') ||
-        content.includes('not in the office') ||
-        content.includes('will be back') ||
-        content.includes('out until')) {
-      return 'Out of Office';
-    }
-
-    // Meeting/Schedule patterns  
-    if (content.includes('meeting scheduled') ||
-        content.includes('meeting booked') ||
-        content.includes('meeting confirmed') ||
-        content.includes('appointment confirmed') ||
-        content.includes('calendar invite') ||
-        content.includes('zoom meeting') ||
-        content.includes('teams meeting') ||
-        content.includes('let\'s schedule') ||
-        content.includes('meeting request accepted')) {
+  fallbackCategorization(subject, bodyText) {
+    const text = `${subject} ${bodyText}`.toLowerCase();
+    
+    // Rule-based categorization as fallback
+    if (text.includes('meeting') || text.includes('schedule') || text.includes('calendar') || text.includes('appointment')) {
       return 'Meeting Booked';
     }
-
-    // Interest patterns (positive responses)
-    if (content.includes('interested') ||
-        content.includes('yes, i would like') ||
-        content.includes('sounds good') ||
-        content.includes('great idea') ||
-        content.includes('let\'s discuss') ||
-        content.includes('when can we') ||
-        content.includes('available for') ||
-        content.includes('looking forward') ||
-        content.includes('please send more') ||
-        content.includes('tell me more')) {
+    
+    if (text.includes('interested') || text.includes('inquiry') || text.includes('collaboration') || text.includes('proposal')) {
       return 'Interested';
     }
-
-    // Spam patterns (promotional/suspicious content)
-    if (content.includes('congratulations') ||
-        content.includes('you\'ve won') ||
-        content.includes('winner') ||
-        content.includes('claim your prize') ||
-        content.includes('click here now') ||
-        content.includes('limited time offer') ||
-        content.includes('act now') ||
-        content.includes('free money') ||
-        content.includes('nigerian prince') ||
-        content.includes('investment opportunity') ||
-        content.includes('make money fast') ||
-        content.includes('unsubscribe') ||
-        subject?.toLowerCase().includes('re:') === false && content.includes('urgent')) {
-      return 'Spam';
-    }
-
-    // Marketing/Cold outreach (like ReachInbox email)  
-    if (content.includes('outreach') ||
-        content.includes('cold email') ||
-        content.includes('marketing') ||
-        content.includes('newsletter') ||
-        content.includes('promotion') ||
-        content.includes('special offer') ||
-        content.includes('supercharge') ||
-        content.includes('boost your') ||
-        content.includes('welcome to')) {
-      return 'Spam'; // Treating marketing as spam for this use case
-    }
-
-    // Not interested patterns
-    if (content.includes('not interested') ||
-        content.includes('no thank you') ||
-        content.includes('remove me') ||
-        content.includes('stop emailing') ||
-        content.includes('not at this time') ||
-        content.includes('not right now') ||
-        content.includes('maybe later')) {
+    
+    if (text.includes('not interested') || text.includes('decline') || text.includes('reject') || text.includes('no thank')) {
       return 'Not Interested';
     }
-
-    // Default: Analyze content type
-    if (content.length < 50) {
-      return 'Not Interested'; // Very short emails usually not important
+    
+    if (text.includes('out of office') || text.includes('vacation') || text.includes('auto-reply') || text.includes('away')) {
+      return 'Out of Office';
     }
-
-    // Test emails from yourself
-    if (subject?.toLowerCase().includes('test')) {
-      return 'Interested'; // Test emails are usually important
+    
+    if (text.includes('unsubscribe') || text.includes('promotion') || text.includes('deal') || text.includes('offer')) {
+      return 'Spam';
     }
+    
+    // Default category
+    return 'Interested';
+  }
 
-    return 'Not Interested'; // Safe default
+  calculateConfidence(emailData, category) {
+    let confidence = 0.7; // Base confidence
+    
+    const subject = emailData.subject?.toLowerCase() || '';
+    const body = emailData.bodyText?.toLowerCase() || '';
+    
+    // Increase confidence based on content quality
+    if (subject.length > 10) confidence += 0.05;
+    if (body.length > 50) confidence += 0.1;
+    if (emailData.from && !emailData.from.includes('noreply')) confidence += 0.05;
+    
+    // Category-specific confidence adjustments
+    switch (category) {
+      case 'Meeting Booked':
+        if (subject.includes('meeting') || subject.includes('calendar')) confidence += 0.1;
+        break;
+      case 'Interested':
+        if (body.includes('interested') || body.includes('inquiry')) confidence += 0.1;
+        break;
+      case 'Spam':
+        if (subject.includes('offer') || body.includes('unsubscribe')) confidence += 0.15;
+        break;
+      case 'Out of Office':
+        if (subject.includes('out of office') || body.includes('vacation')) confidence += 0.2;
+        break;
+      case 'Not Interested':
+        if (body.includes('not interested') || body.includes('decline')) confidence += 0.1;
+        break;
+    }
+    
+    return Math.min(confidence, 0.95); // Cap at 95%
+  }
+
+  async testAI() {
+    try {
+      const testResult = await this.categorizeEmail(
+        'Meeting Request - Project Discussion',
+        'Hi, I would like to schedule a meeting to discuss the project details.'
+      );
+      
+      console.log('✅ AI test successful. Category:', testResult);
+      return { success: true, category: testResult };
+    } catch (error) {
+      console.error('❌ AI test failed:', error);
+      return { success: false, error: error.message };
+    }
   }
 }
 

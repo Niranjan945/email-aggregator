@@ -1,40 +1,61 @@
+// EMAIL MODEL - models/Email.js
 const mongoose = require('mongoose');
 
 const emailSchema = new mongoose.Schema({
-  messageId: { 
-    type: String, 
-    required: true, 
+  messageId: {
+    type: String,
+    required: true,
     unique: true,
     index: true
   },
-  threadId: String,
-  from: { type: String, required: true },
-  to: [String],
-  cc: [String],
-  bcc: [String],
+  userId: {
+    type: String,
+    required: true,
+    index: true
+  },
+  from: {
+    type: String,
+    required: true
+  },
+  to: String,
   subject: String,
-  date: { type: Date, required: true, index: true },
+  date: {
+    type: Date,
+    required: true,
+    index: true
+  },
   bodyText: String,
   bodyHtml: String,
   category: {
     type: String,
-    enum: ['Interested', 'Not Interested', 'Meeting Booked', 'Spam', 'Out of Office', null],
-    default: null
+    enum: ['Interested', 'Not Interested', 'Meeting Booked', 'Spam', 'Out of Office'],
+    default: 'Interested'
   },
-  aiConfidence: { type: Number, min: 0, max: 1 },
-  folder: { type: String, default: 'INBOX' },
-  isRead: { type: Boolean, default: false },
-  hasAttachments: { type: Boolean, default: false },
-  accountId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'EmailAccount',
-    required: true,
-    index: true
+  aiConfidence: {
+    type: Number,
+    min: 0,
+    max: 1,
+    default: 0.8
+  },
+  isRead: {
+    type: Boolean,
+    default: false
+  },
+  isStarred: {
+    type: Boolean,
+    default: false
+  },
+  hasAttachments: {
+    type: Boolean,
+    default: false
   }
-}, { timestamps: true });
+}, {
+  timestamps: true
+});
 
-emailSchema.index({ accountId: 1, date: -1 });
-emailSchema.index({ category: 1, date: -1 });
-emailSchema.index({ from: 1, threadId: 1 });
+// Create indexes for better performance
+emailSchema.index({ userId: 1, date: -1 });
+emailSchema.index({ userId: 1, category: 1 });
+emailSchema.index({ userId: 1, isRead: 1 });
 
 module.exports = mongoose.model('Email', emailSchema);

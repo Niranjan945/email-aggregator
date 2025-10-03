@@ -1,90 +1,57 @@
+// CLEAN SERVER.JS - server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const http = require('http');
+const socketIo = require('socket.io');
 const connectDB = require('./config/database');
 
-// Import all routes
-const authRoutes = require('./routes/authroutes');
-const emailRoutes = require('./routes/emailroutes');
-const searchRoutes = require('./routes/searchRoutes');
-const slackRoutes = require('./routes/slackRoutes');  // NEW: Slack notifications
-
-// Import job processor for background tasks
-const emailProcessor = require('./jobs/emailProcessor');
-
 const app = express();
-const port = process.env.PORT || 3000;
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: ["http://localhost:3000", "http://localhost:5173"],
+    methods: ["GET", "POST"]
+  }
+});
 
 // Middleware
+app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(cors({
-  origin: 'http://localhost:5173', // Vite default port
-  credentials: true
-}));
 
+// Connect to MongoDB
+connectDB();
 
-// Routes
+// Import routes
+const authRoutes = require('./routes/auth');
+const emailRoutes = require('./routes/emails');
+const searchRoutes = require('./routes/search');
+const slackRoutes = require('./routes/slack');
+
+// Use routes
 app.use('/api/auth', authRoutes);
 app.use('/api/emails', emailRoutes);
 app.use('/api/search', searchRoutes);
-app.use('/api/slack', slackRoutes);  // NEW: Slack notification endpoints
+app.use('/api/slack', slackRoutes);
 
-// Health-check endpoint
+// Health check
 app.get('/health', (req, res) => {
-  res.status(200).json({
-    message: 'Server is healthy!',
+  res.json({
     status: 'ok',
-    timestamp: new Date(),
-    features: {
-      emailFetching: 'active',
-      aiCategorization: 'active',
-      searchEngine: 'active',
-      slackNotifications: 'active',  // NEW
-      jobQueue: 'optional',
-      realTimeSync: 'available'
-    }
+    message: 'OneBox Email Aggregator is running',
+    timestamp: new Date()
   });
 });
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('🛑 SIGTERM received, shutting down gracefully');
+// Socket.IO setup
+const socketHandler = require('./sockets/socketHandler');
+socketHandler(io);
 
-  try {
-    await emailProcessor.close();
-
-    const realTimeSync = require('./services/realTimeSync');
-    await realTimeSync.stopAllSyncs();
-
-    console.log('✅ Graceful shutdown completed');
-    process.exit(0);
-  } catch (error) {
-    console.error('❌ Error during shutdown:', error);
-    process.exit(1);
-  }
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log('📧 Email fetching system active');
+  console.log('🔔 Real-time notifications enabled');
 });
 
-// Start server after DB connection
-const startServer = async () => {
-  try {
-    await connectDB();
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log('👷 Background job processor: Active');
-    console.log('🔄 Real-time sync service: Available');
-    console.log('🔍 Search engine: Ready');
-    console.log('📢 Slack notifications: Ready');  // NEW
-
-    app.listen(port, () => {
-      console.log(`🚀 Server running on port ${port}`);
-      console.log(`📬 Job queue and real-time sync ready`);
-      console.log(`🔍 Search functionality available at /api/search/*`);
-      console.log(`📢 Slack notifications available at /api/slack/*`);  // NEW
-    });
-  } catch (error) {
-    console.error('❌ Failed to start server:', error.message);
-    process.exit(1);
-  }
-};
-
-startServer();
+module.exports = { io };
