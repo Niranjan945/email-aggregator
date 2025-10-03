@@ -1,782 +1,445 @@
-// Dynamic Real-Time Dashboard with Full Backend Integration
-import React, { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  Inbox,
+  Search,
+  Star,
+  Archive,
+  Trash2,
+  Reply,
+  Forward,
+  MoreHorizontal,
+  Filter,
+  Refresh,
+  Settings,
+  User,
+  Bell,
+  Zap,
+  Mail,
+  Clock,
+  Check,
+  AlertCircle,
+  WifiOff,
+  Wifi
+} from 'lucide-react';
+import './Dashboard.scss';
 
-const Dashboard = ({ user, onLogout }) => {
-  // Core State
+const Dashboard = ({ user, socket, connectionStatus, onLogout }) => {
   const [emails, setEmails] = useState([]);
   const [selectedEmail, setSelectedEmail] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('inbox');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  
-  // Real-time & System State  
-  const [isAutoFetching, setIsAutoFetching] = useState(true);
-  const [lastFetchTime, setLastFetchTime] = useState(null);
-  const [systemHealth, setSystemHealth] = useState({ status: 'checking' });
-  const [notifications, setNotifications] = useState([]);
-  
-  // Backend Integration State
+  const [showNotifications, setShowNotifications] = useState(false);
   const [emailStats, setEmailStats] = useState({
-    inbox: 0, starred: 0, important: 0, spam: 0,
-    categories: { 'Interested': 0, 'Meeting Booked': 0, 'Not Interested': 0, 'Spam': 0, 'Out of Office': 0 }
+    inbox: 0,
+    starred: 0,
+    important: 0,
+    spam: 0,
+    categories: {}
   });
-  
-  const API_BASE = 'http://localhost:5000';
-  const getAuthHeaders = () => ({
-    'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
-    'Content-Type': 'application/json'
-  });
+  const [notifications, setNotifications] = useState([]);
+  const [lastFetchTime, setLastFetchTime] = useState(null);
 
-  // Initialize Dashboard with Auto-Fetch
-  useEffect(() => {
-    initializeDashboard();
-    startAutoFetch(); // Auto-fetch every 30 seconds
-    
-    return () => {
-      if (window.autoFetchInterval) clearInterval(window.autoFetchInterval);
-    };
-  }, []);
-
-  const initializeDashboard = useCallback(async () => {
-    console.log('🚀 Initializing Dynamic Dashboard...');
-    setLoading(true);
-    
-    try {
-      // Parallel initialization
-      await Promise.allSettled([
-        checkSystemHealth(),
-        ensureEmailAccount(),
-        fetchEmails(true), // Force fetch on init
-        checkBackendServices()
-      ]);
-    } catch (error) {
-      console.error('❌ Dashboard initialization failed:', error);
-      showNotification('Dashboard initialization failed', 'error');
-    }
-    
-    setLoading(false);
-  }, []);
-
-  // =================== REAL-TIME AUTO-FETCH SYSTEM ===================
-  
-  const startAutoFetch = () => {
-    console.log('⚡ Starting auto-fetch system...');
-    
-    // Clear any existing interval
-    if (window.autoFetchInterval) clearInterval(window.autoFetchInterval);
-    
-    // Auto-fetch every 30 seconds
-    window.autoFetchInterval = setInterval(async () => {
-      if (isAutoFetching) {
-        console.log('🔄 Auto-fetching emails...');
-        await fetchEmails(false); // Silent fetch
-      }
-    }, 30000);
-  };
-
-  // =================== DYNAMIC EMAIL FETCHING ===================
-  
-  const fetchEmails = useCallback(async (showLoader = true) => {
-    if (showLoader) setLoading(true);
-    
-    try {
-      console.log('📧 Fetching emails from backend...');
-      
-      // First try to get existing emails from database
-      const listResponse = await axios.get(`${API_BASE}/api/emails/list?limit=50`, {
-        headers: getAuthHeaders()
-      });
-      
-      let fetchedEmails = [];
-      
-      if (listResponse.data.emails && listResponse.data.emails.length > 0) {
-        fetchedEmails = listResponse.data.emails;
-        console.log(`✅ Found ${fetchedEmails.length} emails in database`);
-      } else {
-        console.log('📬 No emails in database, fetching from email server...');
-        
-        // Fetch new emails from email server
-        const fetchResponse = await axios.post(`${API_BASE}/api/emails/fetch`, {
-          accountId: 'default', // Use default account
-          limit: 20
-        }, { 
-          headers: getAuthHeaders(),
-          timeout: 30000 // 30 second timeout
-        });
-        
-        console.log('✅ Email fetch result:', fetchResponse.data);
-        
-        // Get the newly fetched emails
-        const listResponse2 = await axios.get(`${API_BASE}/api/emails/list?limit=50`, {
-          headers: getAuthHeaders()
-        });
-        
-        fetchedEmails = listResponse2.data.emails || [];
-      }
-      
-      // Process and categorize emails
-      const processedEmails = await processEmailsWithAI(fetchedEmails);
-      
-      // Check for new emails and send notifications
-      const newEmails = findNewEmails(processedEmails);
-      if (newEmails.length > 0) {
-        await handleNewEmailNotifications(newEmails);
-      }
-      
-      setEmails(processedEmails);
-      updateEmailStats(processedEmails);
-      setLastFetchTime(new Date());
-      
-      if (!showLoader) {
-        showNotification(`Refreshed: ${processedEmails.length} emails`, 'success');
-      }
-      
-    } catch (error) {
-      console.error('❌ Email fetch failed:', error);
-      
-      if (error.code === 'ECONNREFUSED') {
-        showNotification('Backend server not running', 'error');
-        setSystemHealth({ status: 'error', message: 'Backend offline' });
-      } else if (error.response?.status === 401) {
-        showNotification('Authentication failed', 'error');
-        onLogout();
-      } else {
-        showNotification(`Fetch failed: ${error.message}`, 'error');
-      }
-      
-      // Use demo emails as fallback
-      const demoEmails = generateDemoEmails();
-      setEmails(demoEmails);
-      updateEmailStats(demoEmails);
-    }
-    
-    if (showLoader) setLoading(false);
-  }, [isAutoFetching, emails]);
-
-  // =================== AI EMAIL PROCESSING ===================
-  
-  const processEmailsWithAI = async (rawEmails) => {
-    console.log('🤖 Processing emails with AI categorization...');
-    
-    const processedEmails = rawEmails.map(email => {
-      // Ensure proper email structure
-      const processedEmail = {
-        id: email._id || email.id || `temp-${Date.now()}-${Math.random()}`,
-        messageId: email.messageId || `<generated-${Date.now()}@onebox.com>`,
-        from: email.from || 'Unknown Sender',
-        to: email.to || user.email,
-        subject: email.subject || 'No Subject',
-        date: new Date(email.date || Date.now()),
-        bodyText: email.bodyText || email.body || '',
-        bodyHtml: email.bodyHtml || '',
-        isRead: email.isRead !== undefined ? email.isRead : false,
-        isStarred: email.isStarred !== undefined ? email.isStarred : false,
-        hasAttachments: email.hasAttachments !== undefined ? email.hasAttachments : false,
-        
-        // AI categorization
-        category: email.category || determineEmailCategory(email),
-        aiConfidence: email.aiConfidence || generateAIConfidence(email),
-        
-        // Additional metadata
-        accountId: email.accountId || 'default',
-        folder: email.folder || 'INBOX',
-        threadId: email.threadId || null
-      };
-      
-      return processedEmail;
-    });
-    
-    console.log(`✅ Processed ${processedEmails.length} emails with AI`);
-    return processedEmails;
-  };
-
-  const determineEmailCategory = (email) => {
-    const subject = (email.subject || '').toLowerCase();
-    const body = (email.bodyText || '').toLowerCase();
-    const from = (email.from || '').toLowerCase();
-    
-    // Simple AI categorization logic
-    if (subject.includes('meeting') || subject.includes('schedule') || body.includes('calendar')) {
-      return 'Meeting Booked';
-    }
-    if (subject.includes('interested') || body.includes('interested') || body.includes('let\'s discuss')) {
-      return 'Interested';
-    }
-    if (subject.includes('not interested') || body.includes('not interested') || subject.includes('decline')) {
-      return 'Not Interested';
-    }
-    if (subject.includes('out of office') || body.includes('out of office') || body.includes('vacation')) {
-      return 'Out of Office';
-    }
-    if (from.includes('noreply') || subject.includes('spam') || subject.includes('offer')) {
-      return 'Spam';
-    }
-    
-    return 'Interested'; // Default category
-  };
-
-  const generateAIConfidence = (email) => {
-    // Generate realistic confidence score based on email content
-    const subject = email.subject || '';
-    const body = email.bodyText || '';
-    
-    let confidence = 0.5; // Base confidence
-    
-    if (subject.length > 10) confidence += 0.1;
-    if (body.length > 50) confidence += 0.1;
-    if (body.includes('meeting') || body.includes('schedule')) confidence += 0.2;
-    if (email.from && !email.from.includes('noreply')) confidence += 0.1;
-    
-    return Math.min(confidence, 0.95); // Cap at 95%
-  };
-
-  // =================== NOTIFICATION SYSTEM ===================
-  
-  const findNewEmails = (currentEmails) => {
-    if (!Array.isArray(emails) || emails.length === 0) return [];
-    
-    const existingIds = emails.map(e => e.messageId);
-    return currentEmails.filter(email => !existingIds.includes(email.messageId));
-  };
-
-  const handleNewEmailNotifications = async (newEmails) => {
-    console.log(`📬 Found ${newEmails.length} new emails`);
-    
-    for (const email of newEmails) {
-      // Show browser notification
-      if (Notification.permission === 'granted') {
-        new Notification(`New Email: ${email.category}`, {
-          body: `From: ${email.from}\nSubject: ${email.subject}`,
-          icon: '/favicon.ico'
-        });
-      }
-      
-      // Send Slack notification for important emails
-      if (['Interested', 'Meeting Booked'].includes(email.category)) {
-        await sendSlackNotification(email);
-      }
-      
-      // Add to notifications list
-      setNotifications(prev => [{
-        id: Date.now() + Math.random(),
-        type: email.category,
-        message: `New ${email.category} email from ${email.from}`,
-        timestamp: new Date()
-      }, ...prev.slice(0, 4)]); // Keep last 5 notifications
-    }
-  };
-
-  // =================== BACKEND SERVICE INTEGRATION ===================
-  
-  const ensureEmailAccount = async () => {
-    try {
-      console.log('🔧 Ensuring email account exists...');
-      
-      const response = await axios.get(`${API_BASE}/api/emails/test`, {
-        headers: getAuthHeaders()
-      });
-      
-      console.log('✅ Email account verified:', response.data);
-    } catch (error) {
-      console.error('⚠️ Email account check failed:', error.message);
-    }
-  };
-
-  const checkBackendServices = async () => {
-    try {
-      // Check all backend services
-      const services = await Promise.allSettled([
-        axios.get(`${API_BASE}/api/search/health`, { headers: getAuthHeaders() }),
-        axios.get(`${API_BASE}/api/slack/test`, { headers: getAuthHeaders() }),
-        axios.get(`${API_BASE}/api/emails/queue/status`, { headers: getAuthHeaders() })
-      ]);
-      
-      console.log('🔍 Backend services status:', services);
-    } catch (error) {
-      console.error('❌ Backend service check failed:', error);
-    }
-  };
-
-  const checkSystemHealth = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API_BASE}/health`);
-      setSystemHealth({
-        status: 'ok',
-        message: 'All systems operational',
-        timestamp: new Date()
-      });
-      console.log('✅ System health check passed');
-    } catch (error) {
-      setSystemHealth({
-        status: 'error',
-        message: 'Backend offline',
-        timestamp: new Date()
-      });
-      console.error('❌ System health check failed');
-    }
-  }, []);
-
-  const sendSlackNotification = async (email) => {
-    try {
-      const response = await axios.post(`${API_BASE}/api/slack/email/${email.id}`, {}, {
-        headers: getAuthHeaders()
-      });
-      console.log('📢 Slack notification sent:', response.data);
-    } catch (error) {
-      console.error('❌ Slack notification failed:', error);
-    }
-  };
-
-  // =================== SEARCH FUNCTIONALITY ===================
-  
-  const performSearch = useCallback(async () => {
-    if (!searchQuery.trim()) {
-      await fetchEmails(false);
-      return;
-    }
-
-    setLoading(true);
-    
-    try {
-      const response = await axios.get(`${API_BASE}/api/search/search`, {
-        params: {
-          q: searchQuery,
-          size: 20,
-          ...(selectedCategory !== 'inbox' && { category: selectedCategory })
-        },
-        headers: getAuthHeaders()
-      });
-      
-      const searchResults = response.data.results || [];
-      setEmails(searchResults);
-      updateEmailStats(searchResults);
-      
-      showNotification(`Found ${searchResults.length} results in ${response.data.took}ms`, 'success');
-    } catch (error) {
-      console.error('❌ Search failed:', error);
-      
-      // Fallback to local search
-      const filtered = emails.filter(email => 
-        email.subject?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        email.from?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        email.bodyText?.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      
-      setEmails(filtered);
-      showNotification(`Local search: ${filtered.length} results`, 'warning');
-    }
-    
-    setLoading(false);
-  }, [searchQuery, selectedCategory, emails]);
-
-  // =================== HELPER FUNCTIONS ===================
-  
-  const updateEmailStats = (emailList) => {
-    const categories = emailList.reduce((acc, email) => {
-      const cat = email.category || 'Uncategorized';
-      acc[cat] = (acc[cat] || 0) + 1;
-      return acc;
-    }, {});
-
-    setEmailStats({
-      inbox: emailList.length,
-      starred: emailList.filter(e => e.isStarred).length,
-      important: emailList.filter(e => e.category === 'Important').length,
-      spam: categories.Spam || 0,
-      categories: {
-        'Interested': categories.Interested || 0,
-        'Meeting Booked': categories['Meeting Booked'] || 0,
-        'Not Interested': categories['Not Interested'] || 0,
-        'Spam': categories.Spam || 0,
-        'Out of Office': categories['Out of Office'] || 0
-      }
-    });
-  };
-
-  const showNotification = (message, type = 'info') => {
-    const icon = type === 'success' ? '✅' : type === 'error' ? '❌' : type === 'warning' ? '⚠️' : 'ℹ️';
-    
-    // Create toast notification
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    toast.textContent = `${icon} ${message}`;
-    toast.style.cssText = `
-      position: fixed; top: 20px; right: 20px; z-index: 10000;
-      background: ${type === 'error' ? '#ef4444' : type === 'success' ? '#10b981' : '#f59e0b'};
-      color: white; padding: 12px 20px; border-radius: 8px;
-      font-size: 14px; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-      animation: slideIn 0.3s ease-out;
-    `;
-    
-    document.body.appendChild(toast);
-    setTimeout(() => document.body.removeChild(toast), 3000);
-  };
-
-  const generateDemoEmails = () => [
-    {
-      id: 'demo-1', messageId: '<demo1@test.com>',
-      from: 'sarah.johnson@client.com', subject: 'Project Collaboration Opportunity',
-      bodyText: 'Hi! We are interested in collaborating on your latest project. Could we schedule a meeting?',
-      date: new Date(), isRead: false, category: 'Interested', aiConfidence: 0.92, isStarred: false
-    },
-    {
-      id: 'demo-2', messageId: '<demo2@test.com>',
-      from: 'meetings@company.com', subject: 'Meeting Scheduled: Q4 Review',
-      bodyText: 'Your meeting for Q4 review has been confirmed for next Tuesday at 2 PM.',
-      date: new Date(Date.now() - 30*60*1000), isRead: true, category: 'Meeting Booked', aiConfidence: 0.96, isStarred: true
-    },
-    {
-      id: 'demo-3', messageId: '<demo3@test.com>',
-      from: 'support@service.com', subject: 'Thank you - Not interested at this time',
-      bodyText: 'Thank you for your proposal. We are not interested in this service at the moment.',
-      date: new Date(Date.now() - 60*60*1000), isRead: true, category: 'Not Interested', aiConfidence: 0.88, isStarred: false
-    }
+  const categories = [
+    { id: 'inbox', name: 'Inbox', icon: Inbox, color: 'blue' },
+    { id: 'starred', name: 'Starred', icon: Star, color: 'yellow' },
+    { id: 'important', name: 'Important', icon: Zap, color: 'red' },
+    { id: 'archive', name: 'Archive', icon: Archive, color: 'gray' },
+    { id: 'spam', name: 'Spam', icon: AlertCircle, color: 'orange' }
   ];
 
-  const filteredEmails = emails.filter(email => {
-    if (selectedCategory === 'inbox') return true;
-    if (selectedCategory === 'starred') return email.isStarred;
-    if (selectedCategory === 'important') return email.category === 'Important';
-    if (selectedCategory === 'spam') return email.category === 'Spam';
-    return true;
-  });
+  const aiCategories = [
+    { id: 'Interested', name: 'Interested', color: 'green' },
+    { id: 'Meeting Booked', name: 'Meeting Booked', color: 'blue' },
+    { id: 'Not Interested', name: 'Not Interested', color: 'red' },
+    { id: 'Out of Office', name: 'Out of Office', color: 'yellow' },
+    { id: 'Spam', name: 'Spam', color: 'orange' }
+  ];
 
-  const clearSearch = () => {
-    setSearchQuery('');
+  useEffect(() => {
+    initializeDashboard();
+    setupSocketListeners();
+    return () => {
+      if (socket) {
+        socket.off('new-email');
+        socket.off('email-error');
+      }
+    };
+  }, [socket]);
+
+  const initializeDashboard = async () => {
+    setLoading(true);
+    try {
+      await fetchEmails(true);
+      setupAutoRefresh();
+    } catch (err) {
+      console.error('Dashboard initialization failed:', err);
+      showNotification('Failed to initialize dashboard', 'error');
+    }
+    setLoading(false);
+  };
+
+  const setupSocketListeners = () => {
+    if (!socket) return;
+    socket.on('new-email', (emailData) => {
+      setEmails(prev => [emailData, ...prev]);
+      updateEmailStats([emailData, ...emails]);
+      showNotification(`New ${emailData.category} email from ${emailData.from}`, 'info');
+    });
+    socket.on('email-error', (error) => {
+      showNotification(error.message, 'error');
+    });
+  };
+
+  const setupAutoRefresh = () => {
+    const interval = setInterval(() => {
+      if (connectionStatus === 'connected') fetchEmails(false);
+    }, 60000);
+    return () => clearInterval(interval);
+  };
+
+  const fetchEmails = useCallback(async (showLoader = true) => {
+    if (showLoader) setLoading(true);
+    else setRefreshing(true);
+    try {
+      const res = await fetch(
+        `http://localhost:5000/api/emails/list?userId=${user.email}&limit=100`,
+        { headers: {
+            Authorization: `Bearer ${localStorage.getItem('authToken')}`,
+            'Content-Type': 'application/json'
+          } 
+        }
+      );
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const processed = data.emails.map(email => ({
+          ...email,
+          id: email._id || email.id,
+          date: new Date(email.date),
+          isRead: email.isRead || false,
+          isStarred: email.isStarred || false,
+          category: email.category || 'Interested'
+        }));
+        setEmails(processed);
+        updateEmailStats(processed);
+        setLastFetchTime(new Date());
+        if (!showLoader) showNotification('Emails refreshed successfully', 'success');
+      } else throw new Error(data.error || 'Failed to fetch emails');
+    } catch (err) {
+      console.error('Email fetch error:', err);
+      showNotification('Failed to fetch emails', 'error');
+      if (emails.length === 0) loadDemoEmails();
+    }
+    if (showLoader) setLoading(false);
+    else setRefreshing(false);
+  }, [user, emails.length]);
+
+  const loadDemoEmails = () => {
+    const now = Date.now();
+    const demo = [
+      {
+        id: 'demo-1', messageId: 'demo-1',
+        from: 'sarah.johnson@techcorp.com',
+        to: user?.email || 'user@example.com',
+        subject: 'Exciting Partnership Opportunity',
+        bodyText: 'Hi! Interested in exploring partnership...',
+        date: new Date(now - 30 * 60 * 1000),
+        category: 'Interested', aiConfidence: 0.92, isRead: false, isStarred: false
+      },
+      {
+        id: 'demo-2', messageId: 'demo-2',
+        from: 'calendar@company.com',
+        to: user?.email || 'user@example.com',
+        subject: 'Meeting Confirmed: Demo Tomorrow',
+        bodyText: 'Your meeting is confirmed...',
+        date: new Date(now - 2 * 60 * 60 * 1000),
+        category: 'Meeting Booked', aiConfidence: 0.98, isRead: false, isStarred: true
+      },
+      {
+        id: 'demo-3', messageId: 'demo-3',
+        from: 'mike.brown@startup.io',
+        to: user?.email || 'user@example.com',
+        subject: 'Re: Demo Follow-up - Decision Update',
+        bodyText: 'Thank you for demo; we chose another solution.',
+        date: new Date(now - 4 * 60 * 60 * 1000),
+        category: 'Not Interested', aiConfidence: 0.87, isRead: true, isStarred: false
+      }
+    ];
+    setEmails(demo);
+    updateEmailStats(demo);
+    showNotification('Loading demo emails (Backend offline)', 'warning');
+  };
+
+  const updateEmailStats = (list) => {
+    const stats = {
+      inbox: list.length,
+      starred: list.filter(e => e.isStarred).length,
+      important: list.filter(e => e.category === 'Important').length,
+      spam: list.filter(e => e.category === 'Spam').length,
+      categories: {}
+    };
+    aiCategories.forEach(cat => {
+      stats.categories[cat.id] = list.filter(e => e.category === cat.id).length;
+    });
+    setEmailStats(stats);
+  };
+
+  const filteredEmails = useMemo(() => {
+    let filtered = emails;
+    if (selectedCategory !== 'inbox') {
+      if (selectedCategory === 'starred') filtered = filtered.filter(e => e.isStarred);
+      else if (selectedCategory === 'important') filtered = filtered.filter(e => e.category === 'Important');
+      else if (selectedCategory === 'spam') filtered = filtered.filter(e => e.category === 'Spam');
+      else filtered = filtered.filter(e => e.category === selectedCategory);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter(e =>
+        e.subject.toLowerCase().includes(q) ||
+        e.from.toLowerCase().includes(q) ||
+        e.bodyText.toLowerCase().includes(q)
+      );
+    }
+    return filtered.sort((a, b) => b.date - a.date);
+  }, [emails, selectedCategory, searchQuery]);
+
+  const handleEmailAction = async (emailId, action) => {
+    try {
+      const res = await fetch(`http://localhost:5000/api/emails/${emailId}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('authToken')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ [action]: action === 'markRead' ? true : true })
+      });
+      if (res.ok) {
+        setEmails(prev => prev.map(e =>
+          e.id === emailId
+            ? { ...e, [action === 'markRead' ? 'isRead' : 'isStarred']: true }
+            : e
+        ));
+        showNotification('Email updated successfully', 'success');
+      }
+    } catch {
+      showNotification('Failed to update email', 'error');
+    }
+  };
+
+  const showNotification = (msg, type = 'info') => {
+    const note = { id: Date.now(), message: msg, type, timestamp: new Date() };
+    setNotifications(prev => [note, ...prev.slice(0,4)]);
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== note.id));
+    }, 5000);
+  };
+
+  const handleRefresh = () => {
+    if (socket) socket.emit('manual-refresh', user);
     fetchEmails(false);
   };
 
-  // Request notification permission on load
-  useEffect(() => {
-    if (Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-  }, []);
-
   return (
-    <div className="email-dashboard">
-      {/* Dynamic Header with Real-time Status */}
-      <header className="email-header">
+    <div className="dashboard">
+      <header className="dashboard-header">
         <div className="header-left">
-          <h1>OneBox</h1>
-          <div className="search-container">
+          <div className="logo">
+            <Mail className="logo-icon" /><span className="logo-text">OneBox</span>
+          </div>
+          <div className="search-bar">
+            <Search className="search-icon" />
             <input
               type="text"
               placeholder="Search emails..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && performSearch()}
+              onChange={e => setSearchQuery(e.target.value)}
               className="search-input"
             />
-            {searchQuery && (
-              <button onClick={clearSearch} className="clear-btn">✕</button>
+          </div>
+        </div>
+        <div className="header-right">
+          <div className="connection-status">
+            {connectionStatus === 'connected' ? (
+              <Wifi className="status-icon connected" title="Connected"/>
+            ) : (
+              <WifiOff className="status-icon disconnected" title="Disconnected"/>
             )}
           </div>
-        </div>
-        
-        <div className="header-controls">
-          <button onClick={performSearch} className="control-btn" disabled={loading || !searchQuery.trim()}>
-            🔍 Search
+          <button className="refresh-btn" onClick={handleRefresh} disabled={refreshing} title="Refresh">
+            <Refresh className={`refresh-icon ${refreshing ? 'spinning' : ''}`}/>
           </button>
-          <button onClick={() => fetchEmails(true)} className="control-btn primary" disabled={loading}>
-            {loading ? '↻ Fetching...' : '📧 Refresh Now'}
-          </button>
-          <button 
-            onClick={() => setIsAutoFetching(!isAutoFetching)} 
-            className={`control-btn ${isAutoFetching ? 'success' : ''}`}
-          >
-            {isAutoFetching ? '⚡ Auto-Fetch ON' : '⏸️ Auto-Fetch OFF'}
-          </button>
-          <button onClick={() => setShowSettings(!showSettings)} className="control-btn">
-            ⚙️ Settings
-          </button>
-        </div>
-
-        <div className="header-right">
-          <div className="system-status">
-            <div className={`status-dot ${systemHealth.status === 'ok' ? 'online' : 'offline'}`}></div>
-            <div className="status-info">
-              <span className="status-text">
-                {systemHealth.status === 'ok' ? 'System Online' : 'System Check'}
-              </span>
-              {lastFetchTime && (
-                <span className="last-sync">
-                  Last sync: {lastFetchTime.toLocaleTimeString()}
-                </span>
-              )}
-            </div>
+          <div className="notifications-container">
+            <button onClick={() => setShowNotifications(!showNotifications)} className="notifications-btn">
+              <Bell className="bell-icon"/>
+              {notifications.length > 0 && <span className="notification-badge">{notifications.length}</span>}
+            </button>
+            {showNotifications && (
+              <div className="notifications-dropdown">
+                <h4>Notifications</h4>
+                {notifications.length > 0 ? (
+                  notifications.map(n => (
+                    <div key={n.id} className={`notification-item ${n.type}`}>
+                      <span className="notification-message">{n.message}</span>
+                      <span className="notification-time">{n.timestamp.toLocaleTimeString()}</span>
+                    </div>
+                  ))
+                ) : <p className="no-notifications">No notifications</p>}
+              </div>
+            )}
           </div>
-          
-          {notifications.length > 0 && (
-            <div className="notifications-indicator">
-              <span className="notification-badge">{notifications.length}</span>
-              📬
-            </div>
-          )}
-          
           <div className="user-menu">
-            <span className="user-name">{user.name}</span>
-            <button onClick={onLogout} className="logout-btn">Logout</button>
+            <button onClick={() => setShowSettings(!showSettings)} className="user-btn">
+              <User className="user-icon"/><span className="user-name">{user?.name || 'User'}</span>
+            </button>
+            {showSettings && (
+              <div className="user-dropdown">
+                <div className="user-info"><strong>{user?.name}</strong><span>{user?.email}</span></div>
+                <button className="dropdown-item"><Settings className="item-icon"/>Settings</button>
+                <button className="dropdown-item" onClick={onLogout}>Logout</button>
+              </div>
+            )}
           </div>
         </div>
       </header>
-
-      {/* Settings Panel */}
-      {showSettings && (
-        <div className="settings-panel">
-          <div className="settings-header">
-            <h3>🔧 System Status & Controls</h3>
-            <button onClick={() => setShowSettings(false)} className="close-settings">✕</button>
+      <div className="dashboard-main">
+        <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+          <div className="sidebar-section">
+            <h3>Mailboxes</h3>
+            <nav className="sidebar-nav">
+              {categories.map(cat => {
+                const Icon = cat.icon;
+                const cnt = cat.id === 'inbox' ? emailStats.inbox :
+                            cat.id === 'starred' ? emailStats.starred :
+                            cat.id === 'important' ? emailStats.important :
+                            cat.id === 'spam' ? emailStats.spam : 0;
+                return (
+                  <button
+                    key={cat.id}
+                    className={`nav-item ${selectedCategory === cat.id ? 'active' : ''}`}
+                    onClick={() => setSelectedCategory(cat.id)}
+                  >
+                    <Icon className={`nav-icon ${cat.color}`}/>
+                    <span className="nav-text">{cat.name}</span>
+                    {cnt > 0 && <span className="nav-count">{cnt}</span>}
+                  </button>
+                );
+              })}
+            </nav>
           </div>
-          
-          <div className="settings-content">
-            <div className="auto-fetch-section">
-              <h4>⚡ Auto-Fetch System</h4>
-              <p>Status: <span className={isAutoFetching ? 'status-active' : 'status-inactive'}>
-                {isAutoFetching ? 'ACTIVE' : 'PAUSED'}
-              </span></p>
-              <p>Interval: Every 30 seconds</p>
-              <div className="control-group">
-                <button 
-                  onClick={() => setIsAutoFetching(true)} 
-                  className={`btn-control ${isAutoFetching ? 'active' : ''}`}
-                >
-                  ▶️ Start Auto-Fetch
-                </button>
-                <button 
-                  onClick={() => setIsAutoFetching(false)} 
-                  className={`btn-control ${!isAutoFetching ? 'active' : ''}`}
-                >
-                  ⏸️ Pause Auto-Fetch
-                </button>
+          <div className="sidebar-section">
+            <h3>AI Categories</h3>
+            <nav className="sidebar-nav">
+              {aiCategories.map(cat => {
+                const cnt = emailStats.categories[cat.id] || 0;
+                return (
+                  <button
+                    key={cat.id}
+                    className={`nav-item ${selectedCategory === cat.id ? 'active' : ''}`}
+                    onClick={() => setSelectedCategory(cat.id)}
+                  >
+                    <span className={`category-dot ${cat.color}`}></span>
+                    <span className="nav-text">{cat.name}</span>
+                    {cnt > 0 && <span className="nav-count">{cnt}</span>}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+          <div className="sidebar-stats">
+            <div className="stat-item">
+              <Clock className="stat-icon"/>
+              <div className="stat-content">
+                <span className="stat-label">Last sync</span>
+                <span className="stat-value">
+                  {lastFetchTime ? lastFetchTime.toLocaleTimeString() : 'Never'}
+                </span>
               </div>
             </div>
-
-            <div className="notifications-section">
-              <h4>📬 Recent Notifications</h4>
-              {notifications.length > 0 ? (
-                <div className="notification-list">
-                  {notifications.map(notif => (
-                    <div key={notif.id} className="notification-item">
-                      <span className="notif-type">{notif.type}</span>
-                      <span className="notif-message">{notif.message}</span>
-                      <span className="notif-time">{notif.timestamp.toLocaleTimeString()}</span>
-                    </div>
-                  ))}
+          </div>
+        </aside>
+        <div className="email-list-container">
+          <div className="email-list-header">
+            <h2 className="list-title">
+              {selectedCategory.charAt(0).toUpperCase() + selectedCategory.slice(1)}
+              <span className="email-count">({filteredEmails.length})</span>
+            </h2>
+            <div className="list-actions">
+              <button className="list-action-btn" title="Filter"><Filter className="action-icon"/></button>
+              <button className="list-action-btn" title="More"><MoreHorizontal className="action-icon"/></button>
+            </div>
+          </div>
+          <div className="email-list">
+            {loading ? (
+              <div className="loading-container">
+                <div className="loading-spinner"></div>
+                <span>Loading emails...</span>
+              </div>
+            ) : filteredEmails.length === 0 ? (
+              <div className="empty-state">
+                <Mail className="empty-icon"/>
+                <h3>No emails found</h3>
+                <p>{searchQuery ? `No results for "${searchQuery}"` : `No emails in ${selectedCategory}`}</p>
+              </div>
+            ) : filteredEmails.map(email => (
+              <div
+                key={email.id}
+                className={`email-item ${selectedEmail?.id === email.id ? 'selected' : ''} ${!email.isRead ? 'unread' : ''}`}
+                onClick={() => setSelectedEmail(email)}
+              >
+                <div className="email-item-content">
+                  <div className="email-header">
+                    <div className="email-from">{email.from}</div>
+                    <div className="email-time">{email.date.toLocaleTimeString()}</div>
+                  </div>
+                  <div className="email-subject">{email.subject}</div>
+                  <div className="email-preview">{email.bodyText?.substring(0, 100)}...</div>
+                  <div className="email-meta">
+                    <span className={`category-tag ${email.category.toLowerCase().replace(' ', '-')}`}>
+                      {email.category}
+                    </span>
+                    {email.aiConfidence && <span className="ai-confidence">🤖 {Math.round(email.aiConfidence*100)}%</span>}
+                    {email.isStarred && <Star className="star-icon filled"/>}
+                  </div>
                 </div>
-              ) : (
-                <p>No recent notifications</p>
-              )}
-            </div>
-
-            <div className="system-info-section">
-              <h4>🏥 System Health</h4>
-              <div className="health-item">
-                <span>Backend Server:</span>
-                <span className={`health-status ${systemHealth.status}`}>
-                  {systemHealth.status === 'ok' ? '✅ Online' : '❌ Offline'}
-                </span>
-              </div>
-              <div className="health-item">
-                <span>Auto-Fetch:</span>
-                <span className={`health-status ${isAutoFetching ? 'ok' : 'warning'}`}>
-                  {isAutoFetching ? '✅ Running' : '⚠️ Paused'}
-                </span>
-              </div>
-              <div className="health-item">
-                <span>Email Count:</span>
-                <span className="health-status ok">📧 {emails.length}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="email-container">
-        {/* Sidebar with Dynamic Stats */}
-        <aside className="email-sidebar">
-          <nav className="email-nav">
-            <button 
-              className={`nav-item ${selectedCategory === 'inbox' ? 'active' : ''}`}
-              onClick={() => setSelectedCategory('inbox')}
-            >
-              <span className="nav-icon">📥</span>
-              <span className="nav-label">Inbox</span>
-              <span className="nav-count">{emailStats.inbox}</span>
-            </button>
-            
-            <button 
-              className={`nav-item ${selectedCategory === 'starred' ? 'active' : ''}`}
-              onClick={() => setSelectedCategory('starred')}
-            >
-              <span className="nav-icon">⭐</span>
-              <span className="nav-label">Starred</span>
-              <span className="nav-count">{emailStats.starred}</span>
-            </button>
-            
-            <button 
-              className={`nav-item ${selectedCategory === 'important' ? 'active' : ''}`}
-              onClick={() => setSelectedCategory('important')}
-            >
-              <span className="nav-icon">🔴</span>
-              <span className="nav-label">Important</span>
-              <span className="nav-count">{emailStats.important}</span>
-            </button>
-            
-            <button 
-              className={`nav-item ${selectedCategory === 'spam' ? 'active' : ''}`}
-              onClick={() => setSelectedCategory('spam')}
-            >
-              <span className="nav-icon">🚫</span>
-              <span className="nav-label">Spam</span>
-              <span className="nav-count">{emailStats.spam}</span>
-            </button>
-          </nav>
-
-          {/* Live Stats */}
-          <div className="quick-stats">
-            <h4>📊 Live Stats</h4>
-            <div className="stat-row">
-              <span>Total Emails:</span>
-              <span className="stat-value">{emailStats.inbox}</span>
-            </div>
-            <div className="stat-row">
-              <span>Unread:</span>
-              <span className="stat-value unread">{emails.filter(e => !e.isRead).length}</span>
-            </div>
-            <div className="stat-row">
-              <span>Auto-Fetch:</span>
-              <span className={`stat-value ${isAutoFetching ? 'active' : 'paused'}`}>
-                {isAutoFetching ? 'ON' : 'OFF'}
-              </span>
-            </div>
-          </div>
-
-          {/* Category Breakdown */}
-          <div className="category-stats">
-            <h4>🏷️ Categories</h4>
-            {Object.entries(emailStats.categories).map(([category, count]) => (
-              <div key={category} className="category-stat">
-                <span className="category-name">{category}</span>
-                <span className="category-count">{count}</span>
+                <div className="email-actions">
+                  <button className="action-btn" onClick={e => { e.stopPropagation(); handleEmailAction(email.id,'star'); }} title="Star">
+                    <Star className={email.isStarred?'star-icon filled':'star-icon'}/>
+                  </button>
+                  <button className="action-btn" onClick={e => { e.stopPropagation(); handleEmailAction(email.id,'markRead'); }} title="Mark as read">
+                    <Check className="check-icon"/>
+                  </button>
+                  <button className="action-btn" title="Archive">
+                    <Archive className="archive-icon"/>
+                  </button>
+                </div>
               </div>
             ))}
           </div>
-        </aside>
-
-        {/* Main Email List */}
-        <main className="email-main">
-          <div className="email-toolbar">
-            <h2>{selectedCategory.charAt(0).toUpperCase() + selectedCategory.slice(1)}</h2>
-            <div className="toolbar-actions">
-              <button onClick={() => fetchEmails(true)} className="tool-btn">
-                {loading ? '↻ Refreshing...' : '↻ Refresh'}
-              </button>
-              {selectedEmail && (
-                <button onClick={() => sendSlackNotification(selectedEmail)} className="tool-btn">
-                  📤 Send to Slack
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="email-list">
-            {loading ? (
-              <div className="loading">
-                <div className="spinner"></div>
-                <p>Fetching emails...</p>
-              </div>
-            ) : filteredEmails.length > 0 ? (
-              filteredEmails.map(email => (
-                <div 
-                  key={email.id || email.messageId} 
-                  className={`email-item ${!email.isRead ? 'unread' : ''} ${selectedEmail?.id === email.id ? 'selected' : ''}`}
-                  onClick={() => setSelectedEmail(email)}
-                >
-                  <div className="email-checkbox">
-                    <input type="checkbox" onClick={e => e.stopPropagation()} />
-                  </div>
-                  
-                  <div className="email-star" onClick={(e) => e.stopPropagation()}>
-                    <span className={email.isStarred ? 'starred' : ''}>{email.isStarred ? '⭐' : '☆'}</span>
-                  </div>
-                  
-                  <div className="email-content">
-                    <div className="email-sender">{email.from}</div>
-                    <div className="email-subject">
-                      {email.subject}
-                      <span className="email-preview"> - {email.bodyText?.substring(0, 80)}...</span>
-                    </div>
-                    <div className="email-meta">
-                      <span className={`email-category category-${email.category?.toLowerCase().replace(/\s+/g, '-')}`}>
-                        {email.category}
-                      </span>
-                      {email.aiConfidence && (
-                        <span className="ai-confidence">🤖 {Math.round(email.aiConfidence * 100)}%</span>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <div className="email-date">
-                    {new Date(email.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="empty-inbox">
-                <div className="empty-icon">📧</div>
-                <h3>No emails found</h3>
-                <p>Try refreshing or check your search terms</p>
-                <button onClick={() => fetchEmails(true)} className="btn-primary">
-                  🔄 Fetch Emails Now
-                </button>
-              </div>
-            )}
-          </div>
-        </main>
-
-        {/* Email Detail Panel */}
+        </div>
         {selectedEmail && (
-          <aside className="email-detail">
-            <div className="detail-header">
-              <button onClick={() => setSelectedEmail(null)} className="close-btn">←</button>
-              <div className="detail-actions">
-                <button onClick={() => sendSlackNotification(selectedEmail)} className="action-btn">
-                  📤 Slack
-                </button>
-                <button className="action-btn">🗃 Archive</button>
-                <button className="action-btn">↩️ Reply</button>
+          <div className="email-detail">
+            <div className="email-detail-header">
+              <button className="detail-action-btn primary" title="Reply"><Reply className="action-icon"/>Reply</button>
+              <button className="detail-action-btn" title="Forward"><Forward className="action-icon"/>Forward</button>
+              <button className="detail-action-btn danger" title="Delete"><Trash2 className="action-icon"/>Delete</button>
+            </div>
+            <div className="email-detail-content">
+              <h2 className="email-detail-subject">{selectedEmail.subject}</h2>
+              <div className="email-detail-info">
+                <div><strong>From:</strong> {selectedEmail.from}</div>
+                <div><strong>Date:</strong> {selectedEmail.date.toLocaleString()}</div>
+                <div><strong>Category:</strong> <span className={`category-tag ${selectedEmail.category.toLowerCase().replace(' ','-')}`}>{selectedEmail.category}</span></div>
+              </div>
+              <div className="email-detail-body">
+                {selectedEmail.bodyText
+                  ? <pre className="email-text">{selectedEmail.bodyText}</pre>
+                  : <p className="no-content">No content available</p>}
               </div>
             </div>
-            
-            <div className="detail-content">
-              <h2>{selectedEmail.subject}</h2>
-              
-              <div className="sender-info">
-                <strong>{selectedEmail.from}</strong>
-                <span className="timestamp">
-                  {new Date(selectedEmail.date).toLocaleString()}
-                </span>
-              </div>
-              
-              <div className="email-badges">
-                <span className="category-badge">{selectedEmail.category}</span>
-                {selectedEmail.aiConfidence && (
-                  <span className="ai-badge">
-                    AI Confidence: {Math.round(selectedEmail.aiConfidence * 100)}%
-                  </span>
-                )}
-              </div>
-              
-              <div className="email-body">
-                <p>{selectedEmail.bodyText}</p>
-                <hr />
-                <p><em>📧 Processed by OneBox AI Email Aggregator</em></p>
-              </div>
-            </div>
-          </aside>
+          </div>
         )}
       </div>
     </div>

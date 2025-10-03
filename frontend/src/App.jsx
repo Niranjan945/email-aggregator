@@ -1,5 +1,5 @@
-// Fixed App.jsx with Dynamic Email System
 import React, { useState, useEffect } from 'react';
+import io from 'socket.io-client';
 import './styles/main.scss';
 
 // Import components
@@ -7,249 +7,248 @@ import Landing from './pages/Landingpage';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
+import LoadingSpinner from './components/LoadingSpinner';
 
 function App() {
   const [currentView, setCurrentView] = useState('loading');
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [socket, setSocket] = useState(null);
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
 
   useEffect(() => {
     initializeApp();
-  }, []);
+    return () => {
+      if (socket) {
+        socket.disconnect();
+      }
+    };
+  }, [socket]);
 
   const initializeApp = async () => {
     console.log('🚀 OneBox Email Aggregator starting...');
     setLoading(true);
-    
+
     try {
-      // Check if user is already logged in
       const token = localStorage.getItem('authToken');
       const userData = localStorage.getItem('userData');
-      
+
       if (token && userData) {
-        console.log('✅ Found existing session');
-        setUser(JSON.parse(userData));
+        const parsedUser = JSON.parse(userData);
+        setUser(parsedUser);
+        await initializeSocket(parsedUser);
         setCurrentView('dashboard');
       } else {
-        console.log('🏠 No session found, showing landing page');
         setCurrentView('landing');
       }
-      
-      // Test backend connection
+
       await testBackendConnection();
-      
-    } catch (error) {
-      console.error('❌ App initialization failed:', error);
-      setError('System initialization failed');
-      setCurrentView('landing');
+    } catch (err) {
+      console.error('❌ App initialization failed:', err);
+      setError('System initialization failed. Please refresh the page.');
     }
-    
+
     setLoading(false);
+  };
+
+  const initializeSocket = async (userData) => {
+    try {
+      const socketConnection = io('http://localhost:5000', {
+        auth: { token: localStorage.getItem('authToken') }
+      });
+
+      socketConnection.on('connect', () => {
+        console.log('✅ Socket connected');
+        setConnectionStatus('connected');
+        socketConnection.emit('user-login', userData);
+      });
+
+      socketConnection.on('disconnect', () => {
+        console.log('🔌 Socket disconnected');
+        setConnectionStatus('disconnected');
+      });
+
+      socketConnection.on('connect_error', (err) => {
+        console.error('❌ Socket connection error:', err);
+        setConnectionStatus('error');
+      });
+
+      setSocket(socketConnection);
+    } catch (err) {
+      console.error('❌ Socket initialization failed:', err);
+    }
   };
 
   const testBackendConnection = async () => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
       const response = await fetch('http://localhost:5000/health', {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        timeout: 5000
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal
       });
-      
+      clearTimeout(timeoutId);
+
       if (response.ok) {
-        const data = await response.json();
-        console.log('✅ Backend connection successful:', data.message);
+        console.log('✅ Backend connection successful');
+        setConnectionStatus('connected');
       } else {
-        console.warn('⚠️ Backend responded with error:', response.status);
+        throw new Error(`Backend responded with ${response.status}`);
       }
-    } catch (error) {
-      console.warn('⚠️ Backend connection failed (will use demo mode):', error.message);
+    } catch (err) {
+      console.warn('⚠️ Backend connection failed:', err.message);
+      setConnectionStatus('error');
     }
   };
 
   const handleLogin = async (credentials) => {
-    console.log('🔐 Attempting login...');
     setLoading(true);
     setError(null);
 
     try {
       const response = await fetch('http://localhost:5000/api/auth/login', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(credentials)
       });
-
       const data = await response.json();
 
-      if (response.ok && data.token) {
-        console.log('✅ Login successful');
-        
-        // Store authentication data
+      if (response.ok && data.success) {
         localStorage.setItem('authToken', data.token);
         localStorage.setItem('userData', JSON.stringify(data.user));
-        
         setUser(data.user);
+        await initializeSocket(data.user);
         setCurrentView('dashboard');
-        
         return { success: true };
       } else {
-        console.error('❌ Login failed:', data.message);
-        return { success: false, error: data.message || 'Login failed' };
+        return { success: false, error: data.error || 'Login failed' };
       }
-    } catch (error) {
-      console.error('❌ Login network error:', error);
-      return { success: false, error: 'Connection failed. Please check your network.' };
+    } catch {
+      return { success: false, error: 'Network error. Please try again.' };
     } finally {
       setLoading(false);
     }
   };
 
   const handleSignup = async (userData) => {
-    console.log('📝 Attempting signup...');
     setLoading(true);
     setError(null);
 
     try {
-      const response = await fetch('http://localhost:5000/api/auth/register', {
+      const response = await fetch('http://localhost:5000/api/auth/signup', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(userData)
       });
-
       const data = await response.json();
 
-      if (response.ok && data.token) {
-        console.log('✅ Signup successful');
-        
-        // Store authentication data
+      if (response.ok && data.success) {
         localStorage.setItem('authToken', data.token);
         localStorage.setItem('userData', JSON.stringify(data.user));
-        
         setUser(data.user);
+        await initializeSocket(data.user);
         setCurrentView('dashboard');
-        
         return { success: true };
       } else {
-        console.error('❌ Signup failed:', data.message);
-        return { success: false, error: data.message || 'Signup failed' };
+        return { success: false, error: data.error || 'Signup failed' };
       }
-    } catch (error) {
-      console.error('❌ Signup network error:', error);
-      return { success: false, error: 'Connection failed. Please check your network.' };
+    } catch {
+      return { success: false, error: 'Network error. Please try again.' };
     } finally {
       setLoading(false);
     }
   };
 
   const handleLogout = () => {
-    console.log('👋 Logging out...');
-    
-    // Clear all stored data
     localStorage.removeItem('authToken');
     localStorage.removeItem('userData');
-    
-    // Clear state
+    if (socket) {
+      socket.disconnect();
+      setSocket(null);
+    }
     setUser(null);
+    setConnectionStatus('disconnected');
     setCurrentView('landing');
-    
     console.log('✅ Logout complete');
   };
 
-  // Show loading screen
   if (loading || currentView === 'loading') {
     return (
-      <div className="loading-screen">
-        <div className="loading-content">
-          <div className="loading-spinner"></div>
-          <p>Initializing OneBox...</p>
+      <div className="app-loading">
+        <LoadingSpinner message="Initializing OneBox Email Aggregator..." />
+        <div className="connection-status">
+          <span className={`status-indicator ${connectionStatus}`}></span>
+          <span className="status-text">
+            {connectionStatus === 'connected'
+              ? 'Connected'
+              : connectionStatus === 'connecting'
+              ? 'Connecting...'
+              : connectionStatus === 'error'
+              ? 'Connection Error'
+              : 'Disconnected'}
+          </span>
         </div>
       </div>
     );
   }
 
-  // Show error state
   if (error) {
     return (
-      <div className="error-screen">
-        <div className="error-content">
+      <div className="app-error">
+        <div className="error-container">
           <h2>System Error</h2>
           <p>{error}</p>
-          <button 
-            onClick={() => {
-              setError(null);
-              initializeApp();
-            }}
-            className="btn btn-primary"
-          >
-            Retry
-          </button>
+          <button onClick={() => window.location.reload()}>Refresh Page</button>
         </div>
       </div>
     );
   }
 
-  // Render current view
   switch (currentView) {
     case 'landing':
       return (
-        <div className="app">
-          <Landing 
-            onLoginClick={() => setCurrentView('login')}
-            onSignupClick={() => setCurrentView('signup')}
-          />
-        </div>
+        <Landing
+          onLoginClick={() => setCurrentView('login')}
+          onSignupClick={() => setCurrentView('signup')}
+        />
       );
-    
     case 'login':
       return (
-        <div className="app">
-          <Login 
-            onLogin={handleLogin}
-            onBack={() => setCurrentView('landing')}
-            onSignupClick={() => setCurrentView('signup')}
-          />
-        </div>
+        <Login
+          onLogin={handleLogin}
+          onBack={() => setCurrentView('landing')}
+          onSignupClick={() => setCurrentView('signup')}
+          loading={loading}
+        />
       );
-    
     case 'signup':
       return (
-        <div className="app">
-          <Signup 
-            onSignup={handleSignup}
-            onBack={() => setCurrentView('landing')}
-            onLoginClick={() => setCurrentView('login')}
-          />
-        </div>
+        <Signup
+          onSignup={handleSignup}
+          onBack={() => setCurrentView('landing')}
+          onLoginClick={() => setCurrentView('login')}
+          loading={loading}
+        />
       );
-    
     case 'dashboard':
       return (
-        <div className="app">
-          <Dashboard 
-            user={user}
-            onLogout={handleLogout}
-          />
-        </div>
+        <Dashboard
+          user={user}
+          socket={socket}
+          connectionStatus={connectionStatus}
+          onLogout={handleLogout}
+        />
       );
-    
     default:
       return (
-        <div className="app">
-          <div className="error-content">
+        <div className="app-error">
+          <div className="error-container">
             <h2>Unknown State</h2>
             <p>Application is in an unknown state.</p>
-            <button 
-              onClick={() => setCurrentView('landing')}
-              className="btn btn-primary"
-            >
-              Go Home
-            </button>
+            <button onClick={() => setCurrentView('landing')}>Go to Home</button>
           </div>
         </div>
       );

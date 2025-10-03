@@ -1,185 +1,97 @@
-// SLACK NOTIFICATION SERVICE - services/slackService.js
 const axios = require('axios');
 
 class SlackService {
   constructor() {
     this.webhookUrl = process.env.SLACK_WEBHOOK_URL;
+    this.enabled = !!this.webhookUrl;
   }
 
-  async sendNotification(emailData) {
+  async sendNotification(email) {
+    if (!this.enabled) {
+      console.warn('Slack webhook not configured');
+      return { success: false, error: 'Slack not configured' };
+    }
+
     try {
-      if (!this.webhookUrl) {
-        console.log('⚠️ Slack webhook URL not configured');
-        return { success: false, reason: 'No webhook URL' };
-      }
-
-      console.log('📢 Sending Slack notification for:', emailData.subject);
-
       const message = {
-        text: `📧 New ${emailData.category} Email Received`,
-        blocks: [
+        text: `📧 New ${email.category} Email`,
+        attachments: [
           {
-            type: "header",
-            text: {
-              type: "plain_text",
-              text: `🚨 New ${emailData.category} Email`
-            }
-          },
-          {
-            type: "section",
+            color: this.getCategoryColor(email.category),
             fields: [
               {
-                type: "mrkdwn",
-                text: `*From:*\n${emailData.from}`
+                title: 'From',
+                value: email.from,
+                short: true
               },
               {
-                type: "mrkdwn",
-                text: `*Category:*\n${emailData.category}`
+                title: 'Subject', 
+                value: email.subject,
+                short: true
               },
               {
-                type: "mrkdwn",
-                text: `*Subject:*\n${emailData.subject}`
+                title: 'Category',
+                value: `${email.category} (${Math.round(email.aiConfidence * 100)}% confidence)`,
+                short: true
               },
               {
-                type: "mrkdwn",
-                text: `*AI Confidence:*\n${Math.round(emailData.aiConfidence * 100)}%`
+                title: 'Time',
+                value: new Date(email.date).toLocaleString(),
+                short: true
               }
-            ]
-          },
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `*Preview:*\n${emailData.bodyText?.substring(0, 200)}...`
-            }
-          },
-          {
-            type: "context",
-            elements: [
-              {
-                type: "mrkdwn",
-                text: `📅 ${new Date(emailData.date).toLocaleString()} | OneBox Email Aggregator`
-              }
-            ]
+            ],
+            footer: 'OneBox Email Aggregator',
+            ts: Math.floor(Date.now() / 1000)
           }
         ]
       };
 
-      const response = await axios.post(this.webhookUrl, message, {
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
-
-      if (response.status === 200) {
-        console.log('✅ Slack notification sent successfully');
-        return { success: true, sent: true };
-      } else {
-        console.log('⚠️ Slack notification failed:', response.status);
-        return { success: false, reason: `HTTP ${response.status}` };
-      }
-
-    } catch (error) {
-      console.error('❌ Slack notification error:', error.message);
-      return { success: false, reason: error.message };
-    }
-  }
-
-  async testSlackIntegration() {
-    try {
-      console.log('🧪 Testing Slack integration...');
-
-      const testEmail = {
-        from: 'test@example.com',
-        subject: 'Test Email - Slack Integration',
-        category: 'Interested',
-        aiConfidence: 0.92,
-        bodyText: 'This is a test email to verify that Slack notifications are working correctly.',
-        date: new Date()
-      };
-
-      const result = await this.sendNotification(testEmail);
+      const response = await axios.post(this.webhookUrl, message);
       
-      if (result.success) {
-        console.log('✅ Slack integration test successful');
-      } else {
-        console.log('❌ Slack integration test failed:', result.reason);
-      }
-
-      return result;
+      console.log('📢 Slack notification sent successfully');
+      return { success: true, response: response.status };
 
     } catch (error) {
-      console.error('❌ Slack test error:', error);
+      console.error('❌ Slack notification failed:', error.message);
       return { success: false, error: error.message };
     }
   }
 
-  async sendBulkNotification(emails) {
+  getCategoryColor(category) {
+    const colors = {
+      'Interested': 'good',
+      'Meeting Booked': '#4f46e5', 
+      'Not Interested': 'danger',
+      'Out of Office': 'warning',
+      'Spam': '#f97316'
+    };
+    
+    return colors[category] || '#6b7280';
+  }
+
+  async testWebhook() {
+    if (!this.enabled) {
+      return { success: false, error: 'Webhook URL not configured' };
+    }
+
     try {
-      console.log(`📢 Sending bulk Slack notification for ${emails.length} emails`);
-
-      const categoryGroups = emails.reduce((groups, email) => {
-        const category = email.category || 'Uncategorized';
-        if (!groups[category]) groups[category] = [];
-        groups[category].push(email);
-        return groups;
-      }, {});
-
-      const message = {
-        text: `📧 Email Batch Update - ${emails.length} New Emails`,
-        blocks: [
+      const testMessage = {
+        text: '🧪 OneBox Email Aggregator - Test Notification',
+        attachments: [
           {
-            type: "header",
-            text: {
-              type: "plain_text",
-              text: `📬 Email Batch Update`
-            }
-          },
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `Processed *${emails.length}* new emails:`
-            }
+            color: 'good',
+            text: 'Slack integration is working correctly!',
+            footer: 'OneBox Test',
+            ts: Math.floor(Date.now() / 1000)
           }
         ]
       };
 
-      // Add category breakdown
-      Object.entries(categoryGroups).forEach(([category, categoryEmails]) => {
-        message.blocks.push({
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `*${category}:* ${categoryEmails.length} emails`
-          }
-        });
-      });
-
-      // Add timestamp
-      message.blocks.push({
-        type: "context",
-        elements: [
-          {
-            type: "mrkdwn",
-            text: `📅 ${new Date().toLocaleString()} | OneBox Email Aggregator`
-          }
-        ]
-      });
-
-      const response = await axios.post(this.webhookUrl, message, {
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
-
-      return response.status === 200;
+      const response = await axios.post(this.webhookUrl, testMessage);
+      return { success: true, status: response.status };
 
     } catch (error) {
-      console.error('❌ Bulk Slack notification error:', error);
-      return false;
+      return { success: false, error: error.message };
     }
   }
 }
