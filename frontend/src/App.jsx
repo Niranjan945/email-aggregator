@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import io from 'socket.io-client';
 import './styles/main.scss';
-
-// Import components
 import Landing from './pages/Landingpage';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
