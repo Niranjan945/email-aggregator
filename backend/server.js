@@ -8,7 +8,13 @@ const connectDB = require('./config/database');
 const app = express();
 const server = http.createServer(app);
 
-// Socket.IO setup with CORS
+// Enhanced CORS and Socket.IO setup
+app.use(cors({
+  origin: ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"],
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+}));
+
 const io = socketIo(server, {
   cors: {
     origin: ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"],
@@ -17,34 +23,19 @@ const io = socketIo(server, {
   }
 });
 
-// Enhanced middleware
-app.use(cors({
-  origin: ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"],
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
-}));
-
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Import routes with error handling
+// Connect to MongoDB
+connectDB();
+
+// Import routes
 const authRoutes = require('./routes/authroutes');
 const emailRoutes = require('./routes/emailroutes');
-
-// Create missing routes with basic fallbacks
-let searchRoutes = express.Router();
-searchRoutes.get('/health', (req, res) => res.json({ status: 'ok', service: 'search' }));
-searchRoutes.get('/', (req, res) => res.json({ success: true, results: [] }));
-
-let slackRoutes = express.Router();
-slackRoutes.get('/test', (req, res) => res.json({ success: true, message: 'Slack service available' }));
-slackRoutes.post('/notify/:emailId', (req, res) => res.json({ success: true, message: 'Notification sent' }));
 
 // Use routes
 app.use('/api/auth', authRoutes);
 app.use('/api/emails', emailRoutes);
-app.use('/api/search', searchRoutes);
-app.use('/api/slack', slackRoutes);
 
 // Enhanced health check
 app.get('/health', (req, res) => {
@@ -54,48 +45,29 @@ app.get('/health', (req, res) => {
     timestamp: new Date(),
     services: {
       database: 'connected',
-      email: 'active',
-      websocket: 'active'
+      gmail: process.env.GMAIL_USER ? 'configured' : 'not configured',
+      openai: process.env.OPENAI_API_KEY ? 'configured' : 'not configured',
+      slack: process.env.SLACK_WEBHOOK_URL ? 'configured' : 'not configured'
     }
   });
 });
 
-// Root route with API documentation
+// Root route
 app.get('/', (req, res) => {
   res.json({
     message: 'OneBox Email Aggregator API',
     version: '1.0.0',
-    status: 'running',
     endpoints: {
-      health: '/health',
-      auth: '/api/auth/*',
-      emails: '/api/emails/*',
-      search: '/api/search/*',
-      slack: '/api/slack/*'
-    },
-    documentation: {
+      health: 'GET /health',
       login: 'POST /api/auth/login',
       signup: 'POST /api/auth/signup',
-      emails: 'GET /api/emails/list',
-      fetch: 'POST /api/emails/fetch'
+      fetchEmails: 'POST /api/emails/fetch',
+      listEmails: 'GET /api/emails/list',
+      emailStats: 'GET /api/emails/stats',
+      debug: 'GET /api/emails/debug'
     }
   });
 });
-
-// Socket.IO handler
-try {
-  const socketHandler = require('./sockets/socketHandler');
-  socketHandler(io);
-} catch (error) {
-  console.warn('Socket handler not found, creating basic handler...');
-  io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
-    socket.emit('connection-status', { status: 'connected' });
-    socket.on('disconnect', () => {
-      console.log('Client disconnected:', socket.id);
-    });
-  });
-}
 
 // Global error handler
 app.use((error, req, res, next) => {
@@ -114,47 +86,20 @@ app.use((req, res) => {
     error: `Route ${req.method} ${req.originalUrl} not found`,
     availableRoutes: [
       'GET /health',
-      'GET /',
       'POST /api/auth/login',
-      'POST /api/auth/signup',
-      'GET /api/emails/list',
-      'POST /api/emails/fetch'
+      'POST /api/emails/fetch',
+      'GET /api/emails/list'
     ]
   });
 });
 
 const PORT = process.env.PORT || 5000;
-
-// Start server
-const startServer = async () => {
-  try {
-    await connectDB();
-    
-    server.listen(PORT, () => {
-      console.log(`🚀 OneBox Server running on port ${PORT}`);
-      console.log(`📧 Email fetching system active`);
-      console.log(`🔔 Real-time notifications enabled`);
-      console.log(`🌐 CORS enabled for localhost:3000, localhost:5173`);
-      console.log(`📝 API Documentation: http://localhost:${PORT}`);
-      console.log(`💾 Database: ${process.env.MONGODB_URI ? 'Configured' : 'Not configured'}`);
-      console.log(`🤖 OpenAI: ${process.env.OPENAI_API_KEY ? 'Configured' : 'Not configured'}`);
-      console.log(`📬 Gmail: ${process.env.GMAIL_USER ? 'Configured' : 'Not configured'}`);
-    });
-  } catch (error) {
-    console.error('❌ Failed to start server:', error);
-    process.exit(1);
-  }
-};
-
-startServer();
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('👋 SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('✅ Process terminated');
-    process.exit(0);
-  });
+server.listen(PORT, () => {
+  console.log(`🚀 OneBox Server running on port ${PORT}`);
+  console.log(`📧 Gmail: ${process.env.GMAIL_USER ? '✅ Configured' : '❌ Not configured'}`);
+  console.log(`🤖 OpenAI: ${process.env.OPENAI_API_KEY ? '✅ Configured' : '❌ Not configured'}`);
+  console.log(`📢 Slack: ${process.env.SLACK_WEBHOOK_URL ? '✅ Configured' : '❌ Not configured'}`);
+  console.log(`📝 API Documentation: http://localhost:${PORT}`);
 });
 
 module.exports = { io, app };

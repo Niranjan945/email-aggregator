@@ -1,4 +1,3 @@
-// REAL GMAIL EMAIL SERVICE - services/emailService.js
 const Imap = require('imap');
 const { simpleParser } = require('mailparser');
 
@@ -10,13 +9,13 @@ class EmailService {
       host: 'imap.gmail.com',
       port: 993,
       tls: true,
-      connTimeout: 60000,
-      authTimeout: 5000,
-      keepalive: {
-        interval: 10000,
-        idleInterval: 300000,
-        forceNoop: true
-      }
+      tlsOptions: {
+        rejectUnauthorized: false,
+        servername: 'imap.gmail.com'
+      },
+      connTimeout: 30000,
+      authTimeout: 10000,
+      keepalive: false
     };
   }
 
@@ -28,26 +27,35 @@ class EmailService {
       let emails = [];
       let processed = 0;
       let totalToProcess = 0;
+      
+      const timeout = setTimeout(() => {
+        console.log('⏰ IMAP timeout');
+        imap.destroy();
+        reject(new Error('IMAP timeout'));
+      }, 45000);
 
       imap.once('ready', () => {
-        console.log('✅ IMAP connection ready');
+        console.log('✅ IMAP ready');
         
         imap.openBox('INBOX', true, (err, box) => {
           if (err) {
-            console.error('❌ Error opening inbox:', err);
+            clearTimeout(timeout);
+            console.error('❌ Inbox error:', err);
             return reject(err);
           }
 
-          console.log(`📬 Inbox opened. Total messages: ${box.messages.total}`);
+          console.log(`📬 Inbox opened. ${box.messages.total} total messages`);
           
           if (box.messages.total === 0) {
+            clearTimeout(timeout);
             imap.end();
             return resolve([]);
           }
 
-          // Fetch the most recent emails
+          // Fetch most recent emails
           const start = Math.max(1, box.messages.total - limit + 1);
           const end = box.messages.total;
+          totalToProcess = end - start + 1;
           
           console.log(`📧 Fetching messages ${start} to ${end}`);
           
@@ -56,27 +64,29 @@ class EmailService {
             struct: true
           });
 
-          totalToProcess = end - start + 1;
-
           fetch.on('message', (msg, seqno) => {
             console.log(`📨 Processing message ${seqno}`);
             
             msg.on('body', (stream, info) => {
               simpleParser(stream, (err, parsed) => {
                 if (err) {
-                  console.error('❌ Parse error:', err);
+                  console.error(`❌ Parse error for message ${seqno}:`, err);
                   processed++;
+                  if (processed >= totalToProcess) {
+                    clearTimeout(timeout);
+                    imap.end();
+                    resolve(emails.sort((a, b) => new Date(b.date) - new Date(a.date)));
+                  }
                   return;
                 }
 
                 const emailData = {
                   messageId: parsed.messageId || `<generated-${Date.now()}-${seqno}@gmail.com>`,
-                  from: parsed.from?.text || 'Unknown Sender',
+                  from: parsed.from?.text || 'Unknown',
                   to: parsed.to?.text || userEmail,
                   subject: parsed.subject || 'No Subject',
                   date: parsed.date || new Date(),
-                  bodyText: parsed.text || '',
-                  bodyHtml: parsed.html || ''
+                  bodyText: parsed.text || parsed.textAsHtml || ''
                 };
 
                 emails.push(emailData);
@@ -84,66 +94,47 @@ class EmailService {
 
                 console.log(`✅ Parsed: "${emailData.subject}" from ${emailData.from}`);
 
-                // Check if all messages processed
                 if (processed >= totalToProcess) {
-                  console.log(`🎉 All ${processed} messages processed`);
+                  console.log(`🎉 Processed all ${processed} messages`);
+                  clearTimeout(timeout);
                   imap.end();
-                  
-                  // Sort by date (newest first)
-                  emails.sort((a, b) => new Date(b.date) - new Date(a.date));
-                  resolve(emails);
+                  resolve(emails.sort((a, b) => new Date(b.date) - new Date(a.date)));
                 }
               });
-            });
-
-            msg.once('attributes', (attrs) => {
-              console.log(`📋 Message ${seqno} attributes: ${JSON.stringify(attrs, null, 2)}`);
             });
           });
 
           fetch.once('error', (err) => {
             console.error('❌ Fetch error:', err);
+            clearTimeout(timeout);
             reject(err);
-          });
-
-          fetch.once('end', () => {
-            console.log('📭 Fetch completed');
           });
         });
       });
 
       imap.once('error', (err) => {
-        console.error('❌ IMAP connection error:', err);
+        console.error('❌ IMAP error:', err);
+        clearTimeout(timeout);
         reject(err);
       });
 
       imap.once('end', () => {
         console.log('🔌 IMAP connection ended');
+        clearTimeout(timeout);
       });
 
-      // Set timeout for the operation
-      const timeout = setTimeout(() => {
-        console.log('⏰ IMAP operation timeout');
-        imap.destroy();
-        reject(new Error('IMAP operation timeout'));
-      }, 30000);
-
       imap.connect();
-
-      // Clear timeout when done
-      imap.once('end', () => clearTimeout(timeout));
-      imap.once('error', () => clearTimeout(timeout));
     });
   }
 
   async testConnection() {
     try {
-      console.log('🧪 Testing Gmail IMAP connection...');
+      console.log('🧪 Testing Gmail connection...');
       const emails = await this.fetchGmailEmails(process.env.GMAIL_USER, 1);
-      console.log('✅ Gmail connection test successful');
+      console.log('✅ Gmail connection successful');
       return { success: true, emailCount: emails.length };
     } catch (error) {
-      console.error('❌ Gmail connection test failed:', error);
+      console.error('❌ Gmail test failed:', error.message);
       return { success: false, error: error.message };
     }
   }

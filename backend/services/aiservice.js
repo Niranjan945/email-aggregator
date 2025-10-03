@@ -1,133 +1,104 @@
-// AI CATEGORIZATION SERVICE - services/aiService.js
-const { OpenAI } = require('openai');
+const axios = require('axios');
 
 class AIService {
   constructor() {
-    this.openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
-    });
+    this.openaiApiKey = process.env.OPENAI_API_KEY;
   }
 
   async categorizeEmail(subject, bodyText) {
+    if (!this.openaiApiKey) {
+      console.warn('⚠️ OpenAI not configured, using fallback');
+      return this.fallbackCategorization(subject, bodyText);
+    }
+
     try {
-      console.log('🤖 Categorizing email with AI:', subject);
+      const prompt = `Categorize this email into exactly one category:
+- Interested
+- Meeting Booked
+- Not Interested
+- Out of Office
+- Spam
 
-      const prompt = `
-        Analyze this email and categorize it into one of these categories:
-        - Interested: Business inquiries, collaboration requests, positive responses
-        - Not Interested: Rejections, declines, "not interested" responses
-        - Meeting Booked: Meeting confirmations, calendar invites, scheduled appointments
-        - Spam: Promotional emails, advertisements, suspicious content
-        - Out of Office: Auto-replies, vacation messages, away notifications
+Subject: "${subject}"
+Body: "${bodyText}"
 
-        Email Subject: ${subject}
-        Email Body: ${bodyText?.substring(0, 500)}
+Reply with ONLY the category name.`;
 
-        Respond with just the category name.
-      `;
-
-      const completion = await this.openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
+      const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: 'gpt-3.5-turbo',
         messages: [
-          {
-            role: "user",
-            content: prompt
-          }
+          { role: 'system', content: 'You categorize emails. Reply with only the category name.' },
+          { role: 'user', content: prompt }
         ],
-        max_tokens: 50,
-        temperature: 0.3
+        max_tokens: 10,
+        temperature: 0.1
+      }, {
+        headers: {
+          'Authorization': `Bearer ${this.openaiApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
       });
 
-      const category = completion.choices[0].message.content.trim();
+      const category = response.data.choices[0].message.content.trim();
+      const valid = ['Interested', 'Meeting Booked', 'Not Interested', 'Out of Office', 'Spam'];
       
-      // Validate category
-      const validCategories = ['Interested', 'Not Interested', 'Meeting Booked', 'Spam', 'Out of Office'];
-      const finalCategory = validCategories.includes(category) ? category : this.fallbackCategorization(subject, bodyText);
-      
-      console.log(`✅ AI Categorized as: ${finalCategory}`);
-      return finalCategory;
+      if (valid.includes(category)) {
+        console.log(`🤖 AI categorized as: ${category}`);
+        return category;
+      } else {
+        console.warn(`⚠️ Invalid AI response: ${category}, using fallback`);
+        return this.fallbackCategorization(subject, bodyText);
+      }
 
     } catch (error) {
-      console.error('❌ AI categorization error:', error);
-      // Fallback to rule-based categorization
+      if (error.response?.status === 429) {
+        console.warn('⚠️ OpenAI rate limit reached, using fallback');
+      } else {
+        console.error('❌ AI error:', error.message);
+      }
       return this.fallbackCategorization(subject, bodyText);
     }
   }
 
   fallbackCategorization(subject, bodyText) {
     const text = `${subject} ${bodyText}`.toLowerCase();
-    
-    // Rule-based categorization as fallback
-    if (text.includes('meeting') || text.includes('schedule') || text.includes('calendar') || text.includes('appointment')) {
+
+    if (text.includes('meeting') || text.includes('schedule') || 
+        text.includes('calendar') || text.includes('confirmed')) {
       return 'Meeting Booked';
     }
     
-    if (text.includes('interested') || text.includes('inquiry') || text.includes('collaboration') || text.includes('proposal')) {
+    if (text.includes('interested') || text.includes('partnership') ||
+        text.includes('opportunity') || text.includes('discuss')) {
       return 'Interested';
     }
     
-    if (text.includes('not interested') || text.includes('decline') || text.includes('reject') || text.includes('no thank')) {
+    if (text.includes('not interested') || text.includes('decline') ||
+        text.includes('different solution')) {
       return 'Not Interested';
     }
     
-    if (text.includes('out of office') || text.includes('vacation') || text.includes('auto-reply') || text.includes('away')) {
+    if (text.includes('out of office') || text.includes('vacation') ||
+        text.includes('away')) {
       return 'Out of Office';
     }
     
-    if (text.includes('unsubscribe') || text.includes('promotion') || text.includes('deal') || text.includes('offer')) {
+    if (text.includes('spam') || text.includes('unsubscribe')) {
       return 'Spam';
     }
-    
-    // Default category
+
     return 'Interested';
   }
 
   calculateConfidence(emailData, category) {
-    let confidence = 0.7; // Base confidence
+    let confidence = 0.8;
+    const text = `${emailData.subject} ${emailData.bodyText}`.toLowerCase();
     
-    const subject = emailData.subject?.toLowerCase() || '';
-    const body = emailData.bodyText?.toLowerCase() || '';
+    if (category === 'Meeting Booked' && text.includes('confirmed')) confidence = 0.95;
+    if (category === 'Interested' && text.includes('partnership')) confidence = 0.9;
     
-    // Increase confidence based on content quality
-    if (subject.length > 10) confidence += 0.05;
-    if (body.length > 50) confidence += 0.1;
-    if (emailData.from && !emailData.from.includes('noreply')) confidence += 0.05;
-    
-    // Category-specific confidence adjustments
-    switch (category) {
-      case 'Meeting Booked':
-        if (subject.includes('meeting') || subject.includes('calendar')) confidence += 0.1;
-        break;
-      case 'Interested':
-        if (body.includes('interested') || body.includes('inquiry')) confidence += 0.1;
-        break;
-      case 'Spam':
-        if (subject.includes('offer') || body.includes('unsubscribe')) confidence += 0.15;
-        break;
-      case 'Out of Office':
-        if (subject.includes('out of office') || body.includes('vacation')) confidence += 0.2;
-        break;
-      case 'Not Interested':
-        if (body.includes('not interested') || body.includes('decline')) confidence += 0.1;
-        break;
-    }
-    
-    return Math.min(confidence, 0.95); // Cap at 95%
-  }
-
-  async testAI() {
-    try {
-      const testResult = await this.categorizeEmail(
-        'Meeting Request - Project Discussion',
-        'Hi, I would like to schedule a meeting to discuss the project details.'
-      );
-      
-      console.log('✅ AI test successful. Category:', testResult);
-      return { success: true, category: testResult };
-    } catch (error) {
-      console.error('❌ AI test failed:', error);
-      return { success: false, error: error.message };
-    }
+    return Math.min(confidence, 0.99);
   }
 }
 

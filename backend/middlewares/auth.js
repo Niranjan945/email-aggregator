@@ -1,27 +1,27 @@
-const { verifyToken } = require('../services/authService');
+const jwt = require('jsonwebtoken');
 
-function authenticateToken(req, res, next) {
+const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
   if (!token) {
     return res.status(401).json({
-      message: 'Access denied',
-      error: 'No token provided'
+      success: false,
+      error: 'Access token required'
     });
   }
 
-  try {
-    const decoded = verifyToken(token);
-    req.userId = decoded.userId;
-    req.userEmail = decoded.email;
+  jwt.verify(token, process.env.JWT_SECRET || 'your-fallback-secret', (err, user) => {
+    if (err) {
+      return res.status(403).json({
+        success: false,
+        error: 'Invalid or expired token'
+      });
+    }
+    
+    req.user = user;
     next();
-  } catch (error) {
-    return res.status(403).json({
-      message: 'Access denied', 
-      error: 'Invalid or expired token'
-    });
-  }
-}
+  });
+};
 
 module.exports = { authenticateToken };

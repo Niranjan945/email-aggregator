@@ -1,4 +1,3 @@
-// EMAIL MODEL - models/Email.js
 const mongoose = require('mongoose');
 
 const emailSchema = new mongoose.Schema({
@@ -15,21 +14,36 @@ const emailSchema = new mongoose.Schema({
   },
   from: {
     type: String,
-    required: true
-  },
-  to: String,
-  subject: String,
-  date: {
-    type: Date,
     required: true,
     index: true
   },
-  bodyText: String,
-  bodyHtml: String,
+  to: {
+    type: String,
+    required: true
+  },
+  subject: {
+    type: String,
+    required: true,
+    index: true
+  },
+  bodyText: {
+    type: String,
+    default: ''
+  },
+  bodyHtml: {
+    type: String,
+    default: ''
+  },
+  date: {
+    type: Date,
+    default: Date.now,
+    index: true
+  },
   category: {
     type: String,
-    enum: ['Interested', 'Not Interested', 'Meeting Booked', 'Spam', 'Out of Office'],
-    default: 'Interested'
+    enum: ['Interested', 'Meeting Booked', 'Not Interested', 'Out of Office', 'Spam'],
+    default: 'Interested',
+    index: true
   },
   aiConfidence: {
     type: Number,
@@ -39,13 +53,15 @@ const emailSchema = new mongoose.Schema({
   },
   isRead: {
     type: Boolean,
-    default: false
+    default: false,
+    index: true
   },
   isStarred: {
     type: Boolean,
-    default: false
+    default: false,
+    index: true
   },
-  hasAttachments: {
+  slackNotified: {
     type: Boolean,
     default: false
   }
@@ -53,9 +69,10 @@ const emailSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Create indexes for better performance
+// Compound indexes for better query performance
 emailSchema.index({ userId: 1, date: -1 });
 emailSchema.index({ userId: 1, category: 1 });
 emailSchema.index({ userId: 1, isRead: 1 });
+emailSchema.index({ messageId: 1, userId: 1 });
 
 module.exports = mongoose.model('Email', emailSchema);
