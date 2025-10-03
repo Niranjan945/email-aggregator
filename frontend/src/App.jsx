@@ -5,7 +5,7 @@ import Landing from './pages/Landingpage';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
-import LoadingSpinner from './components/LoadingSpinner';
+import LoadingSpinner from './components/Loadingspinner';
 
 function App() {
   const [currentView, setCurrentView] = useState('loading');
